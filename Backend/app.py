@@ -62,6 +62,9 @@ def round_or_none(x, n=2):
         return None
     return round(float(x), n)
 
+def clamp_score(x, lo=-10, hi=10):
+    return max(lo, min(hi, int(x)))
+
 def calc_signal(df: pd.DataFrame):
     if df is None or len(df) < 35:
         return {
@@ -69,6 +72,7 @@ def calc_signal(df: pd.DataFrame):
             "score": 0,
             "reasons": ["历史数据不足，无法计算完整技术指标"],
             "indicators": {},
+            "component_scores": {},
         }
 
     df = df.copy()
@@ -103,91 +107,129 @@ def calc_signal(df: pd.DataFrame):
         else pd.NA
     )
 
-    score = 0
     reasons = []
+    component_scores = {
+        "trend_ma": 0,
+        "price_vs_ma5": 0,
+        "rsi": 0,
+        "macd": 0,
+        "volume_price": 0,
+        "breakout_20d": 0,
+        "daily_strength": 0,
+    }
 
-    # 趋势
-    if pd.notna(last["ma5"]) and pd.notna(last["ma10"]) and last["ma5"] > last["ma10"]:
-        score += 1
-        reasons.append("MA5 在 MA10 上方")
-    elif pd.notna(last["ma5"]) and pd.notna(last["ma10"]) and last["ma5"] < last["ma10"]:
-        score -= 1
-        reasons.append("MA5 在 MA10 下方")
+    # 1) 均线结构
+    if pd.notna(last["ma5"]) and pd.notna(last["ma10"]):
+        if last["ma5"] > last["ma10"]:
+            component_scores["trend_ma"] += 3
+            reasons.append("MA5 在 MA10 上方")
+        elif last["ma5"] < last["ma10"]:
+            component_scores["trend_ma"] -= 3
+            reasons.append("MA5 在 MA10 下方")
 
-    if pd.notna(last["ma10"]) and pd.notna(last["ma20"]) and last["ma10"] > last["ma20"]:
-        score += 1
-        reasons.append("MA10 在 MA20 上方")
-    elif pd.notna(last["ma10"]) and pd.notna(last["ma20"]) and last["ma10"] < last["ma20"]:
-        score -= 1
-        reasons.append("MA10 在 MA20 下方")
+    if pd.notna(last["ma10"]) and pd.notna(last["ma20"]):
+        if last["ma10"] > last["ma20"]:
+            component_scores["trend_ma"] += 3
+            reasons.append("MA10 在 MA20 上方")
+        elif last["ma10"] < last["ma20"]:
+            component_scores["trend_ma"] -= 3
+            reasons.append("MA10 在 MA20 下方")
 
-    if pd.notna(last["close"]) and pd.notna(last["ma5"]) and last["close"] > last["ma5"]:
-        score += 1
-        reasons.append("收盘价站上 MA5")
-    elif pd.notna(last["close"]) and pd.notna(last["ma5"]) and last["close"] < last["ma5"]:
-        score -= 1
-        reasons.append("收盘价跌破 MA5")
+    # 2) 收盘相对 MA5
+    if pd.notna(last["close"]) and pd.notna(last["ma5"]):
+        diff_pct = (last["close"] - last["ma5"]) / last["ma5"] * 100
+        if diff_pct > 1.5:
+            component_scores["price_vs_ma5"] = 5
+            reasons.append("收盘价明显站上 MA5")
+        elif diff_pct > 0:
+            component_scores["price_vs_ma5"] = 2
+            reasons.append("收盘价站上 MA5")
+        elif diff_pct < -1.5:
+            component_scores["price_vs_ma5"] = -5
+            reasons.append("收盘价明显跌破 MA5")
+        else:
+            component_scores["price_vs_ma5"] = -2
+            reasons.append("收盘价跌破 MA5")
 
-    # RSI
+    # 3) RSI
     if pd.notna(last["rsi14"]):
-        if last["rsi14"] < 30:
-            score += 1
+        rsi = float(last["rsi14"])
+        if rsi < 20:
+            component_scores["rsi"] = 7
+            reasons.append("RSI14 很低，偏超卖")
+        elif rsi < 30:
+            component_scores["rsi"] = 4
             reasons.append("RSI14 低于 30，偏超卖")
-        elif last["rsi14"] > 70:
-            score -= 1
+        elif rsi > 80:
+            component_scores["rsi"] = -7
+            reasons.append("RSI14 很高，偏超买")
+        elif rsi > 70:
+            component_scores["rsi"] = -4
             reasons.append("RSI14 高于 70，偏超买")
-        elif 45 <= last["rsi14"] <= 60:
+        else:
+            component_scores["rsi"] = 0
             reasons.append("RSI14 处于中性区间")
 
-    # MACD
+    # 4) MACD
     if pd.notna(last["macd"]) and pd.notna(last["macd_signal"]):
         if last["macd"] > last["macd_signal"] and prev["macd"] <= prev["macd_signal"]:
-            score += 2
+            component_scores["macd"] = 7
             reasons.append("MACD 金叉")
         elif last["macd"] < last["macd_signal"] and prev["macd"] >= prev["macd_signal"]:
-            score -= 2
+            component_scores["macd"] = -7
             reasons.append("MACD 死叉")
         elif last["macd"] > last["macd_signal"]:
-            score += 1
+            component_scores["macd"] = 3
             reasons.append("MACD 位于信号线之上")
         elif last["macd"] < last["macd_signal"]:
-            score -= 1
+            component_scores["macd"] = -3
             reasons.append("MACD 位于信号线之下")
 
-    # 量价
-    if pd.notna(vol_ratio_5):
-        if vol_ratio_5 > 1.5 and pd.notna(last["pct_chg"]) and last["pct_chg"] > 0:
-            score += 2
+    # 5) 量价
+    if pd.notna(vol_ratio_5) and pd.notna(last["pct_chg"]):
+        if vol_ratio_5 > 1.8 and last["pct_chg"] > 0:
+            component_scores["volume_price"] = 8
+            reasons.append("强放量上涨")
+        elif vol_ratio_5 > 1.5 and last["pct_chg"] > 0:
+            component_scores["volume_price"] = 5
             reasons.append("放量上涨")
-        elif vol_ratio_5 > 1.5 and pd.notna(last["pct_chg"]) and last["pct_chg"] < 0:
-            score -= 2
+        elif vol_ratio_5 > 1.8 and last["pct_chg"] < 0:
+            component_scores["volume_price"] = -8
+            reasons.append("强放量下跌")
+        elif vol_ratio_5 > 1.5 and last["pct_chg"] < 0:
+            component_scores["volume_price"] = -5
             reasons.append("放量下跌")
         elif vol_ratio_5 < 0.8:
+            component_scores["volume_price"] = -1
             reasons.append("成交量低于 5 日均量")
 
-    # 20日突破
+    # 6) 20日突破
     if pd.notna(high_20) and pd.notna(last["close"]) and last["close"] > high_20:
-        score += 2
+        component_scores["breakout_20d"] = 8
         reasons.append("收盘价突破近 20 日高点")
-    if pd.notna(low_20) and pd.notna(last["close"]) and last["close"] < low_20:
-        score -= 2
+    elif pd.notna(low_20) and pd.notna(last["close"]) and last["close"] < low_20:
+        component_scores["breakout_20d"] = -8
         reasons.append("收盘价跌破近 20 日低点")
 
-    # 当日强弱
-    if pd.notna(last["close"]) and pd.notna(prev["close"]) and last["close"] > prev["close"]:
-        score += 1
-        reasons.append("最新收盘高于前一日")
-    elif pd.notna(last["close"]) and pd.notna(prev["close"]) and last["close"] < prev["close"]:
-        score -= 1
-        reasons.append("最新收盘低于前一日")
+    # 7) 当日强弱
+    if pd.notna(last["close"]) and pd.notna(prev["close"]):
+        if last["close"] > prev["close"]:
+            component_scores["daily_strength"] = 2
+            reasons.append("最新收盘高于前一日")
+        elif last["close"] < prev["close"]:
+            component_scores["daily_strength"] = -2
+            reasons.append("最新收盘低于前一日")
 
-    if score >= 4:
+    component_scores = {k: clamp_score(v) for k, v in component_scores.items()}
+    score = int(sum(component_scores.values()))
+
+    if score >= 12:
         label = "偏多"
-    elif score >= 2:
+    elif score >= 4:
         label = "轻度偏多"
-    elif score <= -4:
+    elif score <= -12:
         label = "偏空"
-    elif score <= -2:
+    elif score <= -4:
         label = "轻度偏空"
     else:
         label = "观望"
@@ -208,9 +250,10 @@ def calc_signal(df: pd.DataFrame):
 
     return {
         "label": label,
-        "score": int(score),
+        "score": score,
         "reasons": reasons,
         "indicators": indicators,
+        "component_scores": component_scores,
     }
 
 @app.get("/")
