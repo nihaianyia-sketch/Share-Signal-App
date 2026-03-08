@@ -6,6 +6,19 @@ type SignalData = {
   label: string;
   score: number;
   reasons: string[];
+  indicators?: {
+    close?: number;
+    ma5?: number;
+    ma10?: number;
+    ma20?: number;
+    rsi14?: number;
+    vol_ratio_5?: number;
+    macd?: number;
+    macd_signal?: number;
+    macd_hist?: number;
+    high_20?: number;
+    low_20?: number;
+  };
 };
 
 type HistoryItem = {
@@ -46,10 +59,10 @@ function safeText(s?: string) {
 }
 
 function signalStyle(label?: string) {
-  if (label === '偏多') {
+  if (label === '偏多' || label === '轻度偏多') {
     return 'bg-green-100 text-green-900 border-green-400';
   }
-  if (label === '偏空') {
+  if (label === '偏空' || label === '轻度偏空') {
     return 'bg-red-100 text-red-900 border-red-400';
   }
   return 'bg-yellow-100 text-yellow-900 border-yellow-400';
@@ -69,8 +82,7 @@ function PriceLineChart({ data }: { data: HistoryItem[] }) {
 
     return data
       .map((d, i) => {
-        const x =
-          pad + (i * (width - pad * 2)) / Math.max(data.length - 1, 1);
+        const x = pad + (i * (width - pad * 2)) / Math.max(data.length - 1, 1);
         const y =
           height - pad - ((Number(d.close) - min) / range) * (height - pad * 2);
         return `${x},${y}`;
@@ -88,17 +100,27 @@ function PriceLineChart({ data }: { data: HistoryItem[] }) {
       <svg viewBox="0 0 760 260" className="w-full h-auto">
         <line x1="24" y1="236" x2="736" y2="236" stroke="#666" opacity="0.6" />
         <line x1="24" y1="24" x2="24" y2="236" stroke="#666" opacity="0.6" />
-        <polyline
-          fill="none"
-          stroke="#111"
-          strokeWidth="3"
-          points={points}
-        />
+        <polyline fill="none" stroke="#111" strokeWidth="3" points={points} />
       </svg>
       <div className="flex justify-between text-sm text-black mt-2">
         <span>最低：{min}</span>
         <span>最高：{max}</span>
       </div>
+    </div>
+  );
+}
+
+function IndicatorCard({
+  title,
+  value,
+}: {
+  title: string;
+  value: string | number | undefined | null;
+}) {
+  return (
+    <div className="border border-gray-300 rounded p-3 bg-white">
+      <div className="text-sm font-semibold text-gray-700 mb-1">{title}</div>
+      <div className="text-lg font-bold text-black">{value ?? '-'}</div>
     </div>
   );
 }
@@ -147,10 +169,11 @@ export default function HomePage() {
 
   const latest = data?.history?.[data.history.length - 1];
   const chartData = data?.history?.slice(-20) || [];
+  const indicators = data?.signal?.indicators;
 
   return (
     <main className="min-h-screen max-w-5xl mx-auto p-6 bg-white text-black">
-      <h1 className="text-3xl font-bold mb-6 text-black">A股买卖点助手 V2</h1>
+      <h1 className="text-3xl font-bold mb-6 text-black">A股买卖点助手 V3</h1>
 
       <div className="flex gap-3 mb-6">
         <input
@@ -187,7 +210,7 @@ export default function HomePage() {
 
           {data.signal && (
             <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
-              <h2 className="text-xl font-semibold mb-3 text-black">信号结果</h2>
+              <h2 className="text-xl font-semibold mb-3 text-black">交易参考信号</h2>
               <div
                 className={`inline-block px-3 py-1 rounded-full border text-sm font-semibold mb-3 ${signalStyle(
                   data.signal.label
@@ -195,7 +218,7 @@ export default function HomePage() {
               >
                 {data.signal.label}
               </div>
-              <p className="text-black">分数：{data.signal.score}</p>
+              <p className="text-black font-medium">综合分数：{data.signal.score}</p>
               <div className="mt-3">
                 <p className="font-semibold mb-2 text-black">原因：</p>
                 <ul className="list-disc pl-5 space-y-1 text-black">
@@ -203,6 +226,24 @@ export default function HomePage() {
                     <li key={idx}>{reason}</li>
                   ))}
                 </ul>
+              </div>
+            </section>
+          )}
+
+          {indicators && (
+            <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
+              <h2 className="text-xl font-semibold mb-3 text-black">技术指标</h2>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                <IndicatorCard title="MA5" value={indicators.ma5} />
+                <IndicatorCard title="MA10" value={indicators.ma10} />
+                <IndicatorCard title="MA20" value={indicators.ma20} />
+                <IndicatorCard title="RSI14" value={indicators.rsi14} />
+                <IndicatorCard title="量比(5日)" value={indicators.vol_ratio_5} />
+                <IndicatorCard title="MACD" value={indicators.macd} />
+                <IndicatorCard title="MACD Signal" value={indicators.macd_signal} />
+                <IndicatorCard title="MACD Hist" value={indicators.macd_hist} />
+                <IndicatorCard title="20日高点" value={indicators.high_20} />
+                <IndicatorCard title="20日低点" value={indicators.low_20} />
               </div>
             </section>
           )}
