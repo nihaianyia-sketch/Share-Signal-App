@@ -149,7 +149,7 @@ export default function HomePage() {
 
   return (
     <main className="min-h-screen max-w-5xl mx-auto p-6 bg-gray-50">
-      <h1 className="text-3xl font-bold mb-6">A股买卖点助手</h1>
+      <h1 className="text-3xl font-bold mb-6">A股买卖点助手 V2</h1>
 
       <div className="flex gap-3 mb-6">
         <input
