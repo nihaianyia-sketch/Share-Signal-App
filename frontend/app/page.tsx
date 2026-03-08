@@ -2,6 +2,16 @@
 
 import { useMemo, useState } from 'react';
 
+type ComponentScores = {
+  trend_ma?: number;
+  price_vs_ma5?: number;
+  rsi?: number;
+  macd?: number;
+  volume_price?: number;
+  breakout_20d?: number;
+  daily_strength?: number;
+};
+
 type SignalData = {
   label: string;
   score: number;
@@ -19,6 +29,7 @@ type SignalData = {
     high_20?: number;
     low_20?: number;
   };
+  component_scores?: ComponentScores;
 };
 
 type HistoryItem = {
@@ -125,6 +136,61 @@ function IndicatorCard({
   );
 }
 
+function ScoreBar({
+  title,
+  score,
+}: {
+  title: string;
+  score: number;
+}) {
+  const clamped = Math.max(-10, Math.min(10, score));
+  const leftPercent = ((clamped + 10) / 20) * 100;
+
+  const scoreColor =
+    clamped > 0 ? 'text-green-700' : clamped < 0 ? 'text-red-700' : 'text-gray-700';
+
+  return (
+    <div className="mb-4">
+      <div className="flex justify-between items-center mb-1">
+        <span className="font-medium text-black">{title}</span>
+        <span className={`font-bold ${scoreColor}`}>{clamped}</span>
+      </div>
+
+      <div className="relative h-6 rounded-full overflow-hidden border border-gray-300">
+        <div className="absolute inset-y-0 left-0 w-1/2 bg-red-200" />
+        <div className="absolute inset-y-0 right-0 w-1/2 bg-green-200" />
+        <div className="absolute inset-y-0 left-1/2 w-px bg-black" />
+
+        <div
+          className="absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-black border border-white shadow"
+          style={{
+            left: `calc(${leftPercent}% - 8px)`,
+          }}
+        />
+      </div>
+
+      <div className="flex justify-between text-xs text-gray-700 mt-1">
+        <span>-10</span>
+        <span>0</span>
+        <span>+10</span>
+      </div>
+    </div>
+  );
+}
+
+function componentTitle(key: keyof ComponentScores): string {
+  const map: Record<keyof ComponentScores, string> = {
+    trend_ma: '均线结构',
+    price_vs_ma5: '收盘相对MA5',
+    rsi: 'RSI',
+    macd: 'MACD',
+    volume_price: '量价关系',
+    breakout_20d: '20日突破',
+    daily_strength: '当日强弱',
+  };
+  return map[key];
+}
+
 export default function HomePage() {
   const [symbol, setSymbol] = useState('600519');
   const [data, setData] = useState<HistoryResponse | null>(null);
@@ -170,10 +236,11 @@ export default function HomePage() {
   const latest = data?.history?.[data.history.length - 1];
   const chartData = data?.history?.slice(-20) || [];
   const indicators = data?.signal?.indicators;
+  const componentScores = data?.signal?.component_scores;
 
   return (
     <main className="min-h-screen max-w-5xl mx-auto p-6 bg-white text-black">
-      <h1 className="text-3xl font-bold mb-6 text-black">A股买卖点助手 V3</h1>
+      <h1 className="text-3xl font-bold mb-6 text-black">A股买卖点助手 V4</h1>
 
       <div className="flex gap-3 mb-6">
         <input
@@ -227,6 +294,17 @@ export default function HomePage() {
                   ))}
                 </ul>
               </div>
+            </section>
+          )}
+
+          {componentScores && (
+            <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
+              <h2 className="text-xl font-semibold mb-4 text-black">单项技术评分</h2>
+              {(
+                Object.entries(componentScores) as [keyof ComponentScores, number][]
+              ).map(([key, value]) => (
+                <ScoreBar key={key} title={componentTitle(key)} score={value ?? 0} />
+              ))}
             </section>
           )}
 
