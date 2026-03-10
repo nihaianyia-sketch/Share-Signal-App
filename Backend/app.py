@@ -2,6 +2,7 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 import os
 from datetime import datetime, timedelta
+
 import pandas as pd
 import tushare as ts
 import akshare as ak
@@ -49,17 +50,12 @@ def safe_text(s):
 
 def get_stock_name(pro, ts_code: str):
     try:
-        df = pro.stock_basic(
-            ts_code=ts_code,
-            fields="ts_code,name"
-        )
+        df = pro.stock_basic(ts_code=ts_code, fields="ts_code,name")
         if df is not None and not df.empty:
-            row = df.iloc[0]
-            return safe_text(row.get("name"))
+            return safe_text(df.iloc[0].get("name"))
     except Exception:
         pass
     return None
-
 
 def calc_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     delta = series.diff()
@@ -269,74 +265,82 @@ def calc_signal(df: pd.DataFrame):
         "indicators": indicators,
         "component_scores": component_scores,
     }
-def calc_index_mood(index_df: pd.DataFrame):
-    if index_df is None or len(index_df) < 12:
-        return {"score": 0, "label": "中性", "details": []}
 
-    df = index_df.copy()
-    df["close"] = pd.to_numeric(df["close"], errors="coerce")
-    df["pct_chg"] = pd.to_numeric(df["pct_chg"], errors="coerce")
-    df["ma5"] = df["close"].rolling(5).mean()
-    df["ma10"] = df["close"].rolling(10).mean()
+def get_ak_index_snapshot():
+    # 先试东方财富
+    try:
+        df = ak.stock_zh_index_spot_em(symbol="沪深重要指数")
+        if df is not None and not df.empty:
+            df = df.copy()
+            if "代码" in df.columns:
+                df["代码"] = df["代码"].astype(str)
+            if "名称" in df.columns:
+                df["名称"] = df["名称"].astype(str)
+            return df
+    except Exception:
+        pass
 
-    last = df.iloc[-1]
-    score = 0
-    details = []
+    # 再试新浪
+    try:
+        df = ak.stock_zh_index_spot_sina()
+        if df is not None and not df.empty:
+            df = df.copy()
+            if "代码" in df.columns:
+                df["原始代码"] = df["代码"].astype(str)
+                df["代码"] = (
+                    df["原始代码"]
+                    .str.replace("sh", "", regex=False)
+                    .str.replace("sz", "", regex=False)
+                )
+            if "名称" in df.columns:
+                df["名称"] = df["名称"].astype(str)
+            return df
+    except Exception:
+        pass
 
-    if pd.notna(last["pct_chg"]):
-        if last["pct_chg"] > 2:
-            score += 4
-            details.append("指数大涨")
-        elif last["pct_chg"] > 0:
-            score += 2
-            details.append("指数上涨")
-        elif last["pct_chg"] < -2:
-            score -= 4
-            details.append("指数大跌")
-        elif last["pct_chg"] < 0:
-            score -= 2
-            details.append("指数下跌")
+    return None
 
-    if pd.notna(last["close"]) and pd.notna(last["ma5"]):
-        if last["close"] > last["ma5"]:
-            score += 2
-            details.append("指数站上 MA5")
-        else:
-            score -= 2
-            details.append("指数跌破 MA5")
-
-    if pd.notna(last["close"]) and pd.notna(last["ma10"]):
-        if last["close"] > last["ma10"]:
-            score += 2
-            details.append("指数站上 MA10")
-        else:
-            score -= 2
-            details.append("指数跌破 MA10")
-
-    score = clamp_score(score)
-
-    if score >= 6:
-        label = "偏热"
-    elif score >= 2:
-        label = "偏暖"
-    elif score <= -6:
-        label = "偏冷"
-    elif score <= -2:
-        label = "偏弱"
-    else:
-        label = "中性"
-
-    return {"score": score, "label": label, "details": details}
-
-def get_index_df(pro, ts_code: str, start_date: str, end_date: str):
-    df = pro.index_daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
+def pick_index_row(df: pd.DataFrame, ts_code: str):
     if df is None or df.empty:
-        return df
-    return df.sort_values("trade_date").reset_index(drop=True)
+        return None
 
+    code_map = {
+        "000001.SH": ["000001", "sh000001", "上证指数", "上证综指"],
+        "399001.SZ": ["399001", "sz399001", "深证成指"],
+        "399006.SZ": ["399006", "sz399006", "创业板指"],
+        "000688.SH": ["000688", "sh000688", "科创50"],
+    }
+
+    keys = code_map.get(ts_code, [])
+    if not keys:
+        return None
+
+    work = df.copy()
+    if "代码" in work.columns:
+        work["代码"] = work["代码"].astype(str)
+    if "名称" in work.columns:
+        work["名称"] = work["名称"].astype(str)
+    if "原始代码" in work.columns:
+        work["原始代码"] = work["原始代码"].astype(str)
+
+    for k in keys:
+        cond = None
+        if "代码" in work.columns:
+            cond = (work["代码"] == k) if cond is None else (cond | (work["代码"] == k))
+        if "原始代码" in work.columns:
+            cond = (work["原始代码"] == k) if cond is None else (cond | (work["原始代码"] == k))
+        if "名称" in work.columns:
+            cond = (work["名称"].str.contains(k, na=False)) if cond is None else (cond | work["名称"].str.contains(k, na=False))
+
+        if cond is not None:
+            row = work[cond]
+            if not row.empty:
+                return row.iloc[0]
+
+    return None
 @app.get("/")
 def root():
-    return {"message": "a-share backend with market benchmark and mood"}
+    return {"message": "a-share backend with stock name and index fallback"}
 
 @app.get("/history")
 def get_history(symbol: str = Query(..., description="A股代码，如 600519 或 000001.SZ")):
@@ -362,6 +366,7 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
         hist_df = hist_df.sort_values("trade_date").reset_index(drop=True)
         signal = calc_signal(hist_df)
         out_df = hist_df.tail(80).reset_index(drop=True)
+        stock_name = get_stock_name(pro, ts_code)
 
         benchmark_info = infer_benchmark(symbol)
 
@@ -463,6 +468,7 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
 
         return {
             "symbol": symbol,
+            "name": stock_name,
             "ts_code": ts_code,
             "history": out_df.to_dict(orient="records"),
             "signal": signal,
@@ -474,4 +480,3 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
             "error": "获取历史行情失败",
             "detail": safe_text(e)
         }
-
