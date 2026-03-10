@@ -225,9 +225,7 @@ export default function HomePage() {
       const raw = localStorage.getItem('favoriteStocksV2');
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          setFavorites(parsed);
-        }
+        if (Array.isArray(parsed)) setFavorites(parsed);
       }
     } catch {}
   }, []);
