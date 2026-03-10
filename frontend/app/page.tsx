@@ -75,6 +75,7 @@ type MarketMoodData = {
 
 type HistoryResponse = {
   symbol?: string;
+  name?: string | null;
   ts_code?: string;
   history?: HistoryItem[];
   signal?: SignalData;
@@ -82,6 +83,13 @@ type HistoryResponse = {
   market_mood?: MarketMoodData;
   error?: string;
   detail?: string;
+};
+
+type FavoriteItem = {
+  symbol: string;
+  name?: string | null;
+  close?: number | null;
+  label?: string | null;
 };
 
 function formatDate(s: string) {
@@ -210,21 +218,23 @@ export default function HomePage() {
   const [data, setData] = useState<HistoryResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [favorites, setFavorites] = useState<string[]>([]);
+  const [favorites, setFavorites] = useState<FavoriteItem[]>([]);
 
   useEffect(() => {
     try {
-      const raw = localStorage.getItem('favoriteStocks');
+      const raw = localStorage.getItem('favoriteStocksV2');
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) setFavorites(parsed.map(String));
+        if (Array.isArray(parsed)) {
+          setFavorites(parsed);
+        }
       }
     } catch {}
   }, []);
 
   useEffect(() => {
     try {
-      localStorage.setItem('favoriteStocks', JSON.stringify(favorites));
+      localStorage.setItem('favoriteStocksV2', JSON.stringify(favorites));
     } catch {}
   }, [favorites]);
 
@@ -273,7 +283,22 @@ export default function HomePage() {
         };
       }
 
+      json.name = safeText(json.name);
+
       setData(json);
+
+      setFavorites((prev) =>
+        prev.map((item) =>
+          item.symbol === finalSymbol
+            ? {
+                ...item,
+                name: json.name || item.name,
+                close: json.history?.[json.history.length - 1]?.close ?? item.close,
+                label: json.signal?.label || item.label,
+              }
+            : item
+        )
+      );
     } catch (e: any) {
       setError(e.message || '加载失败');
     } finally {
@@ -288,14 +313,27 @@ export default function HomePage() {
   function toggleFavorite() {
     const s = symbol.trim();
     if (!s) return;
+
     setFavorites((prev) => {
-      if (prev.includes(s)) return prev.filter((x) => x !== s);
-      return [s, ...prev.filter((x) => x !== s)].slice(0, 20);
+      const exists = prev.some((x) => x.symbol === s);
+      if (exists) {
+        return prev.filter((x) => x.symbol !== s);
+      }
+
+      const latest = data?.history?.[data.history.length - 1];
+      const item: FavoriteItem = {
+        symbol: s,
+        name: data?.symbol === s ? data?.name : null,
+        close: data?.symbol === s ? latest?.close ?? null : null,
+        label: data?.symbol === s ? data?.signal?.label ?? null : null,
+      };
+
+      return [item, ...prev].slice(0, 20);
     });
   }
 
   function removeFavorite(s: string) {
-    setFavorites((prev) => prev.filter((x) => x !== s));
+    setFavorites((prev) => prev.filter((x) => x.symbol !== s));
   }
 
   const latest = data?.history?.[data.history.length - 1];
@@ -304,11 +342,11 @@ export default function HomePage() {
   const componentScores = data?.signal?.component_scores;
   const benchmark = data?.benchmark;
   const marketMood = data?.market_mood;
-  const isFavorite = favorites.includes(symbol.trim());
+  const isFavorite = favorites.some((x) => x.symbol === symbol.trim());
 
   return (
     <main className="min-h-screen max-w-7xl mx-auto p-6 bg-white text-black">
-      <h1 className="text-3xl font-bold mb-6 text-black">A股买卖点助手 V6</h1>
+      <h1 className="text-3xl font-bold mb-6 text-black">A股买卖点助手 V7</h1>
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
         <aside className="lg:col-span-1">
@@ -344,26 +382,36 @@ export default function HomePage() {
             ) : (
               <div className="space-y-2">
                 {favorites.map((fav) => {
-                  const active = fav === symbol.trim();
+                  const active = fav.symbol === symbol.trim();
                   return (
                     <div
-                      key={fav}
-                      className={`flex items-center justify-between border rounded px-3 py-2 ${
+                      key={fav.symbol}
+                      className={`border rounded p-3 ${
                         active ? 'border-black bg-gray-100' : 'border-gray-300'
                       }`}
                     >
-                      <button
-                        onClick={() => handleSearch(fav)}
-                        className="text-left flex-1 font-medium"
-                      >
-                        {fav}
-                      </button>
-                      <button
-                        onClick={() => removeFavorite(fav)}
-                        className="text-red-700 ml-3"
-                      >
-                        ×
-                      </button>
+                      <div className="flex items-start justify-between gap-2">
+                        <button
+                          onClick={() => handleSearch(fav.symbol)}
+                          className="text-left flex-1"
+                        >
+                          <div className="font-semibold text-black">
+                            {fav.name || '未命名股票'}
+                          </div>
+                          <div className="text-sm text-gray-700">{fav.symbol}</div>
+                        </button>
+                        <button
+                          onClick={() => removeFavorite(fav.symbol)}
+                          className="text-red-700"
+                        >
+                          ×
+                        </button>
+                      </div>
+
+                      <div className="mt-2 text-sm text-gray-800">
+                        <div>最新价：{fav.close ?? '-'}</div>
+                        <div>信号：{fav.label ?? '-'}</div>
+                      </div>
                     </div>
                   );
                 })}
@@ -380,7 +428,7 @@ export default function HomePage() {
             <>
               <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
                 <h2 className="text-xl font-semibold mb-3">
-                  {data.symbol} {data.ts_code ? `(${data.ts_code})` : ''}
+                  {data.name || '未命名股票'} {data.symbol ? `(${data.symbol})` : ''}
                 </h2>
                 <p>最新交易日：{formatDate(latest.trade_date)}</p>
                 <p>收盘价：{latest.close}</p>
