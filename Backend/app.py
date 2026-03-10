@@ -32,6 +32,16 @@ def to_ts_code(symbol: str) -> str:
         return f"{s}.SH"
     return f"{s}.SZ"
 
+def infer_benchmark(symbol: str):
+    s = str(symbol).strip()
+    if s.startswith(("688", "689")):
+        return {"name": "科创50", "ts_code": "000688.SH"}
+    if s.startswith("300"):
+        return {"name": "创业板指", "ts_code": "399006.SZ"}
+    if s.startswith(("600", "601", "603", "605", "900")):
+        return {"name": "上证综指", "ts_code": "000001.SH"}
+    return {"name": "深证成指", "ts_code": "399001.SZ"}
+
 def safe_text(s):
     if s is None:
         return None
@@ -41,10 +51,8 @@ def calc_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     delta = series.diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
-
     avg_gain = gain.rolling(period).mean()
     avg_loss = loss.rolling(period).mean()
-
     rs = avg_gain / avg_loss.replace(0, pd.NA)
     rsi = 100 - (100 / (1 + rs))
     return rsi.fillna(50)
@@ -64,7 +72,6 @@ def round_or_none(x, n=2):
 
 def clamp_score(x, lo=-10, hi=10):
     return max(lo, min(hi, int(x)))
-
 def calc_signal(df: pd.DataFrame):
     if df is None or len(df) < 35:
         return {
@@ -118,7 +125,6 @@ def calc_signal(df: pd.DataFrame):
         "daily_strength": 0,
     }
 
-    # 1) 均线结构
     if pd.notna(last["ma5"]) and pd.notna(last["ma10"]):
         if last["ma5"] > last["ma10"]:
             component_scores["trend_ma"] += 3
@@ -135,7 +141,6 @@ def calc_signal(df: pd.DataFrame):
             component_scores["trend_ma"] -= 3
             reasons.append("MA10 在 MA20 下方")
 
-    # 2) 收盘相对 MA5
     if pd.notna(last["close"]) and pd.notna(last["ma5"]):
         diff_pct = (last["close"] - last["ma5"]) / last["ma5"] * 100
         if diff_pct > 1.5:
@@ -151,7 +156,6 @@ def calc_signal(df: pd.DataFrame):
             component_scores["price_vs_ma5"] = -2
             reasons.append("收盘价跌破 MA5")
 
-    # 3) RSI
     if pd.notna(last["rsi14"]):
         rsi = float(last["rsi14"])
         if rsi < 20:
@@ -170,7 +174,6 @@ def calc_signal(df: pd.DataFrame):
             component_scores["rsi"] = 0
             reasons.append("RSI14 处于中性区间")
 
-    # 4) MACD
     if pd.notna(last["macd"]) and pd.notna(last["macd_signal"]):
         if last["macd"] > last["macd_signal"] and prev["macd"] <= prev["macd_signal"]:
             component_scores["macd"] = 7
@@ -185,7 +188,6 @@ def calc_signal(df: pd.DataFrame):
             component_scores["macd"] = -3
             reasons.append("MACD 位于信号线之下")
 
-    # 5) 量价
     if pd.notna(vol_ratio_5) and pd.notna(last["pct_chg"]):
         if vol_ratio_5 > 1.8 and last["pct_chg"] > 0:
             component_scores["volume_price"] = 8
@@ -203,7 +205,6 @@ def calc_signal(df: pd.DataFrame):
             component_scores["volume_price"] = -1
             reasons.append("成交量低于 5 日均量")
 
-    # 6) 20日突破
     if pd.notna(high_20) and pd.notna(last["close"]) and last["close"] > high_20:
         component_scores["breakout_20d"] = 8
         reasons.append("收盘价突破近 20 日高点")
@@ -211,7 +212,6 @@ def calc_signal(df: pd.DataFrame):
         component_scores["breakout_20d"] = -8
         reasons.append("收盘价跌破近 20 日低点")
 
-    # 7) 当日强弱
     if pd.notna(last["close"]) and pd.notna(prev["close"]):
         if last["close"] > prev["close"]:
             component_scores["daily_strength"] = 2
@@ -255,10 +255,74 @@ def calc_signal(df: pd.DataFrame):
         "indicators": indicators,
         "component_scores": component_scores,
     }
+def calc_index_mood(index_df: pd.DataFrame):
+    if index_df is None or len(index_df) < 12:
+        return {"score": 0, "label": "中性", "details": []}
+
+    df = index_df.copy()
+    df["close"] = pd.to_numeric(df["close"], errors="coerce")
+    df["pct_chg"] = pd.to_numeric(df["pct_chg"], errors="coerce")
+    df["ma5"] = df["close"].rolling(5).mean()
+    df["ma10"] = df["close"].rolling(10).mean()
+
+    last = df.iloc[-1]
+    score = 0
+    details = []
+
+    if pd.notna(last["pct_chg"]):
+        if last["pct_chg"] > 2:
+            score += 4
+            details.append("指数大涨")
+        elif last["pct_chg"] > 0:
+            score += 2
+            details.append("指数上涨")
+        elif last["pct_chg"] < -2:
+            score -= 4
+            details.append("指数大跌")
+        elif last["pct_chg"] < 0:
+            score -= 2
+            details.append("指数下跌")
+
+    if pd.notna(last["close"]) and pd.notna(last["ma5"]):
+        if last["close"] > last["ma5"]:
+            score += 2
+            details.append("指数站上 MA5")
+        else:
+            score -= 2
+            details.append("指数跌破 MA5")
+
+    if pd.notna(last["close"]) and pd.notna(last["ma10"]):
+        if last["close"] > last["ma10"]:
+            score += 2
+            details.append("指数站上 MA10")
+        else:
+            score -= 2
+            details.append("指数跌破 MA10")
+
+    score = clamp_score(score)
+
+    if score >= 6:
+        label = "偏热"
+    elif score >= 2:
+        label = "偏暖"
+    elif score <= -6:
+        label = "偏冷"
+    elif score <= -2:
+        label = "偏弱"
+    else:
+        label = "中性"
+
+    return {"score": score, "label": label, "details": details}
+
+def get_index_df(pro, ts_code: str, start_date: str, end_date: str):
+    df = pro.index_daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
+    if df is None or df.empty:
+        return df
+    return df.sort_values("trade_date").reset_index(drop=True)
 
 @app.get("/")
 def root():
-    return {"message": "a-share backend with advanced technical analysis"}
+    return {"message": "a-share backend with market benchmark and mood"}
 
 @app.get("/history")
 def get_history(symbol: str = Query(..., description="A股代码，如 600519 或 000001.SZ")):
@@ -267,7 +331,7 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
         ts_code = to_ts_code(symbol)
 
         end_date = datetime.now().strftime("%Y%m%d")
-        start_date = (datetime.now() - timedelta(days=220)).strftime("%Y%m%d")
+        start_date = (datetime.now() - timedelta(days=260)).strftime("%Y%m%d")
 
         hist_df = pro.daily(
             ts_code=ts_code,
@@ -285,11 +349,79 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
         signal = calc_signal(hist_df)
         out_df = hist_df.tail(80).reset_index(drop=True)
 
+        benchmark_info = infer_benchmark(symbol)
+        benchmark_df = get_index_df(
+            pro,
+            benchmark_info["ts_code"],
+            start_date,
+            end_date
+        )
+
+        benchmark = None
+        if benchmark_df is not None and not benchmark_df.empty:
+            b_last = benchmark_df.iloc[-1]
+            benchmark = {
+                "name": benchmark_info["name"],
+                "ts_code": benchmark_info["ts_code"],
+                "trade_date": safe_text(b_last.get("trade_date")),
+                "close": round_or_none(b_last.get("close")),
+                "pct_chg": round_or_none(b_last.get("pct_chg")),
+            }
+
+        market_indices = [
+            {"name": "上证综指", "ts_code": "000001.SH"},
+            {"name": "深证成指", "ts_code": "399001.SZ"},
+            {"name": "创业板指", "ts_code": "399006.SZ"},
+            {"name": "科创50", "ts_code": "000688.SH"},
+        ]
+
+        market_parts = []
+        mood_scores = []
+
+        for idx in market_indices:
+            idx_df = get_index_df(pro, idx["ts_code"], start_date, end_date)
+            if idx_df is None or idx_df.empty:
+                continue
+
+            idx_last = idx_df.iloc[-1]
+            mood = calc_index_mood(idx_df)
+
+            part = {
+                "name": idx["name"],
+                "ts_code": idx["ts_code"],
+                "trade_date": safe_text(idx_last.get("trade_date")),
+                "close": round_or_none(idx_last.get("close")),
+                "pct_chg": round_or_none(idx_last.get("pct_chg")),
+                "mood_score": mood["score"],
+            }
+            market_parts.append(part)
+            mood_scores.append(mood["score"])
+
+        market_mood_score = round(sum(mood_scores) / len(mood_scores)) if mood_scores else 0
+        market_mood_score = clamp_score(market_mood_score)
+
+        if market_mood_score >= 6:
+            market_mood_label = "偏热"
+        elif market_mood_score >= 2:
+            market_mood_label = "偏暖"
+        elif market_mood_score <= -6:
+            market_mood_label = "偏冷"
+        elif market_mood_score <= -2:
+            market_mood_label = "偏弱"
+        else:
+            market_mood_label = "中性"
+
         return {
             "symbol": symbol,
             "ts_code": ts_code,
             "history": out_df.to_dict(orient="records"),
             "signal": signal,
+            "benchmark": benchmark,
+            "market_mood": {
+                "score": market_mood_score,
+                "label": market_mood_label,
+                "indices": market_parts,
+            },
         }
     except Exception as e:
         return {
