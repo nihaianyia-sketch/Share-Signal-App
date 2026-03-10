@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 type ComponentScores = {
   trend_ma?: number;
@@ -46,11 +46,40 @@ type HistoryItem = {
   amount: number;
 };
 
+type BenchmarkData = {
+  name?: string;
+  ts_code?: string;
+  trade_date?: string | null;
+  close?: number | null;
+  pct_chg?: number | null;
+  available?: boolean;
+  error?: string | null;
+};
+
+type MarketMoodIndex = {
+  name?: string;
+  ts_code?: string;
+  trade_date?: string | null;
+  close?: number | null;
+  pct_chg?: number | null;
+  mood_score?: number | null;
+};
+
+type MarketMoodData = {
+  score?: number;
+  label?: string;
+  indices?: MarketMoodIndex[];
+  available?: boolean;
+  error?: string | null;
+};
+
 type HistoryResponse = {
   symbol?: string;
   ts_code?: string;
   history?: HistoryItem[];
   signal?: SignalData;
+  benchmark?: BenchmarkData;
+  market_mood?: MarketMoodData;
   error?: string;
   detail?: string;
 };
@@ -60,7 +89,7 @@ function formatDate(s: string) {
   return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
 }
 
-function safeText(s?: string) {
+function safeText(s?: string | null) {
   if (!s) return '';
   try {
     return decodeURIComponent(escape(s));
@@ -70,10 +99,10 @@ function safeText(s?: string) {
 }
 
 function signalStyle(label?: string) {
-  if (label === '偏多' || label === '轻度偏多') {
+  if (label === '偏多' || label === '轻度偏多' || label === '偏暖' || label === '偏热') {
     return 'bg-green-100 text-green-900 border-green-400';
   }
-  if (label === '偏空' || label === '轻度偏空') {
+  if (label === '偏空' || label === '轻度偏空' || label === '偏弱' || label === '偏冷') {
     return 'bg-red-100 text-red-900 border-red-400';
   }
   return 'bg-yellow-100 text-yellow-900 border-yellow-400';
@@ -145,7 +174,6 @@ function ScoreBar({
 }) {
   const clamped = Math.max(-10, Math.min(10, score));
   const leftPercent = ((clamped + 10) / 20) * 100;
-
   const scoreColor =
     clamped > 0 ? 'text-green-700' : clamped < 0 ? 'text-red-700' : 'text-gray-700';
 
@@ -160,12 +188,9 @@ function ScoreBar({
         <div className="absolute inset-y-0 left-0 w-1/2 bg-red-200" />
         <div className="absolute inset-y-0 right-0 w-1/2 bg-green-200" />
         <div className="absolute inset-y-0 left-1/2 w-px bg-black" />
-
         <div
           className="absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-black border border-white shadow"
-          style={{
-            left: `calc(${leftPercent}% - 8px)`,
-          }}
+          style={{ left: `calc(${leftPercent}% - 8px)` }}
         />
       </div>
 
@@ -190,21 +215,43 @@ function componentTitle(key: keyof ComponentScores): string {
   };
   return map[key];
 }
-
 export default function HomePage() {
   const [symbol, setSymbol] = useState('600519');
   const [data, setData] = useState<HistoryResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [favorites, setFavorites] = useState<string[]>([]);
 
-  async function handleSearch() {
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('favoriteStocks');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          setFavorites(parsed.map(String));
+        }
+      }
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('favoriteStocks', JSON.stringify(favorites));
+    } catch {}
+  }, [favorites]);
+
+  async function handleSearch(targetSymbol?: string) {
+    const finalSymbol = (targetSymbol ?? symbol).trim();
+    if (!finalSymbol) return;
+
     setLoading(true);
     setError('');
     setData(null);
+    setSymbol(finalSymbol);
 
     try {
       const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
-      const res = await fetch(`${baseUrl}/history?symbol=${symbol}`);
+      const res = await fetch(`${baseUrl}/history?symbol=${finalSymbol}`);
       const json: HistoryResponse = await res.json();
 
       if (!res.ok) {
@@ -225,6 +272,22 @@ export default function HomePage() {
         };
       }
 
+      if (json.market_mood) {
+        json.market_mood = {
+          ...json.market_mood,
+          label: safeText(json.market_mood.label),
+          error: safeText(json.market_mood.error),
+        };
+      }
+
+      if (json.benchmark) {
+        json.benchmark = {
+          ...json.benchmark,
+          name: safeText(json.benchmark.name),
+          error: safeText(json.benchmark.error),
+        };
+      }
+
       setData(json);
     } catch (e: any) {
       setError(e.message || '加载失败');
@@ -233,29 +296,85 @@ export default function HomePage() {
     }
   }
 
+  function toggleFavorite() {
+    const s = symbol.trim();
+    if (!s) return;
+
+    setFavorites((prev) => {
+      if (prev.includes(s)) {
+        return prev.filter((x) => x !== s);
+      }
+      return [s, ...prev.filter((x) => x !== s)].slice(0, 20);
+    });
+  }
+
+  function removeFavorite(s: string) {
+    setFavorites((prev) => prev.filter((x) => x !== s));
+  }
+
   const latest = data?.history?.[data.history.length - 1];
   const chartData = data?.history?.slice(-20) || [];
   const indicators = data?.signal?.indicators;
   const componentScores = data?.signal?.component_scores;
+  const benchmark = data?.benchmark;
+  const marketMood = data?.market_mood;
+  const isFavorite = favorites.includes(symbol.trim());
 
   return (
     <main className="min-h-screen max-w-5xl mx-auto p-6 bg-white text-black">
-      <h1 className="text-3xl font-bold mb-6 text-black">A股买卖点助手 V4</h1>
+      <h1 className="text-3xl font-bold mb-6 text-black">A股买卖点助手 V5</h1>
 
-      <div className="flex gap-3 mb-6">
-        <input
-          className="border border-gray-500 rounded px-3 py-2 flex-1 bg-white text-black placeholder:text-gray-700"
-          value={symbol}
-          onChange={(e) => setSymbol(e.target.value)}
-          placeholder="输入股票代码，例如 600519"
-        />
-        <button
-          onClick={handleSearch}
-          className="bg-black text-white px-4 py-2 rounded border border-black"
-        >
-          查询
-        </button>
-      </div>
+      <section className="border border-gray-400 rounded p-4 mb-6 bg-white">
+        <div className="flex gap-3 mb-4">
+          <input
+            className="border border-gray-500 rounded px-3 py-2 flex-1 bg-white text-black placeholder:text-gray-700"
+            value={symbol}
+            onChange={(e) => setSymbol(e.target.value)}
+            placeholder="输入股票代码，例如 600519"
+          />
+          <button
+            onClick={() => handleSearch()}
+            className="bg-black text-white px-4 py-2 rounded border border-black"
+          >
+            查询
+          </button>
+          <button
+            onClick={toggleFavorite}
+            className="bg-white text-black px-4 py-2 rounded border border-gray-500"
+          >
+            {isFavorite ? '取消收藏' : '收藏'}
+          </button>
+        </div>
+
+        <div>
+          <p className="font-semibold mb-2">收藏股</p>
+          {favorites.length === 0 ? (
+            <p className="text-gray-700">暂无收藏</p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {favorites.map((fav) => (
+                <div
+                  key={fav}
+                  className="flex items-center gap-2 border border-gray-300 rounded px-3 py-1"
+                >
+                  <button
+                    onClick={() => handleSearch(fav)}
+                    className="text-black underline"
+                  >
+                    {fav}
+                  </button>
+                  <button
+                    onClick={() => removeFavorite(fav)}
+                    className="text-red-700"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
 
       {loading && <p className="text-black">加载中...</p>}
       {error && <p className="text-red-700 mb-4 font-medium">{error}</p>}
@@ -294,6 +413,54 @@ export default function HomePage() {
                   ))}
                 </ul>
               </div>
+            </section>
+          )}
+
+          {benchmark && (
+            <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
+              <h2 className="text-xl font-semibold mb-3 text-black">对应大盘</h2>
+              {benchmark.available ? (
+                <>
+                  <p>指数：{benchmark.name}</p>
+                  <p>最新价：{benchmark.close ?? '-'}</p>
+                  <p>涨跌幅：{benchmark.pct_chg ?? '-'}%</p>
+                </>
+              ) : (
+                <p className="text-gray-700">
+                  暂不可用：{benchmark.error || '当前未获取到指数数据'}
+                </p>
+              )}
+            </section>
+          )}
+
+          {marketMood && (
+            <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
+              <h2 className="text-xl font-semibold mb-3 text-black">市场气氛指数</h2>
+              {marketMood.available ? (
+                <>
+                  <div
+                    className={`inline-block px-3 py-1 rounded-full border text-sm font-semibold mb-3 ${signalStyle(
+                      marketMood.label
+                    )}`}
+                  >
+                    {marketMood.label}
+                  </div>
+                  <ScoreBar title="市场气氛" score={marketMood.score ?? 0} />
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {(marketMood.indices || []).map((idx) => (
+                      <div key={idx.ts_code} className="border border-gray-300 rounded p-3">
+                        <p className="font-semibold">{idx.name}</p>
+                        <p>涨跌幅：{idx.pct_chg ?? '-'}%</p>
+                        <p>气氛分：{idx.mood_score ?? '-'}</p>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <p className="text-gray-700">
+                  暂不可用：{marketMood.error || '当前未获取到市场气氛数据'}
+                </p>
+              )}
             </section>
           )}
 
