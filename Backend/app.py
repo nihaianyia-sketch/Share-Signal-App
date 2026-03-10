@@ -47,6 +47,20 @@ def safe_text(s):
         return None
     return str(s)
 
+def get_stock_name(pro, ts_code: str):
+    try:
+        df = pro.stock_basic(
+            ts_code=ts_code,
+            fields="ts_code,name"
+        )
+        if df is not None and not df.empty:
+            row = df.iloc[0]
+            return safe_text(row.get("name"))
+    except Exception:
+        pass
+    return None
+
+
 def calc_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     delta = series.diff()
     gain = delta.clip(lower=0)
