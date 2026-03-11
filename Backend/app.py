@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 import os
+import json
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -18,6 +19,22 @@ app.add_middleware(
 )
 
 TOKEN = os.getenv("TUSHARE_TOKEN", "").strip()
+
+
+STOCK_NAME_FILE = os.path.join(os.path.dirname(__file__), "stock_names.json")
+
+def load_stock_names():
+    try:
+        with open(STOCK_NAME_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+LOCAL_STOCK_NAMES = load_stock_names()
+
+def get_stock_name_local(ts_code: str):
+    return LOCAL_STOCK_NAMES.get(ts_code)
+
 
 def get_pro():
     if not TOKEN:
@@ -366,7 +383,7 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
         hist_df = hist_df.sort_values("trade_date").reset_index(drop=True)
         signal = calc_signal(hist_df)
         out_df = hist_df.tail(80).reset_index(drop=True)
-        stock_name = get_stock_name(pro, ts_code)
+        stock_name = get_stock_name_local(ts_code) or get_stock_name(pro, ts_code)
 
         benchmark_info = infer_benchmark(symbol)
 
