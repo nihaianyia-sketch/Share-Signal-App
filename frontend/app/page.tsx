@@ -78,7 +78,6 @@ type MarketMoodData = {
   error?: string | null;
 };
 
-
 type RelativeStrengthData = {
   available?: boolean;
   benchmark_name?: string;
@@ -342,6 +341,14 @@ export default function HomePage() {
         };
       }
 
+      if (json.relative_strength) {
+        json.relative_strength = {
+          ...json.relative_strength,
+          benchmark_name: safeText(json.relative_strength.benchmark_name),
+          error: safeText(json.relative_strength.error),
+        };
+      }
+
       json.name = safeText(json.name);
 
       setData(json);
@@ -413,7 +420,7 @@ export default function HomePage() {
 
   return (
     <main className="min-h-screen max-w-7xl mx-auto p-6 bg-white text-black">
-      <h1 className="text-3xl font-bold mb-6 text-black">A股买卖点助手 V8</h1>
+      <h1 className="text-3xl font-bold mb-6 text-black">A股买卖点助手 V9</h1>
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
         <aside className="lg:col-span-1">
@@ -570,7 +577,7 @@ export default function HomePage() {
 
               {marketMood && (
                 <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
-                  <h2 className="text-xl font-semibold mb-3">市场气氛指数</h2>
+                  <h2 className="text-xl font-semibold mb-3">市场气氛</h2>
                   {marketMood.available ? (
                     <>
                       <div
@@ -594,6 +601,30 @@ export default function HomePage() {
                   ) : (
                     <p className="text-gray-700">
                       暂不可用：{marketMood.error || '当前未获取到市场气氛数据'}
+                    </p>
+                  )}
+                </section>
+              )}
+
+              {relativeStrength && (
+                <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
+                  <h2 className="text-xl font-semibold mb-3">相对大盘强弱</h2>
+                  {relativeStrength.available ? (
+                    <>
+                      <p>基准：{relativeStrength.benchmark_name || '-'}</p>
+                      <div className="mt-3">
+                        <ScoreBar title="相对大盘强弱" score={relativeStrength.score ?? 0} />
+                      </div>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
+                        <IndicatorCard title="当日RS" value={relativeStrength.rs_day} />
+                        <IndicatorCard title="5日RS" value={relativeStrength.rs_5} />
+                        <IndicatorCard title="10日RS" value={relativeStrength.rs_10} />
+                        <IndicatorCard title="20日RS" value={relativeStrength.rs_20} />
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-gray-700">
+                      暂不可用：{relativeStrength.error || '对应大盘历史数据暂不可用'}
                     </p>
                   )}
                 </section>
