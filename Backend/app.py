@@ -28,6 +28,8 @@ def load_stock_names():
         with open(STOCK_NAME_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
+        market_sentiment = get_market_sentiment()
+
         return {}
 
 LOCAL_STOCK_NAMES = load_stock_names()
@@ -517,6 +519,7 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
             "benchmark": benchmark,
             "market_mood": market_mood,
             "relative_strength": relative_strength,
+            "market_sentiment": market_sentiment,
         }
     except Exception as e:
         return {
@@ -750,5 +753,58 @@ def calc_relative_strength(stock_df: pd.DataFrame, bench_df: pd.DataFrame, bench
             "rs_20": None,
             "score": 0,
             "error": safe_text(e)
+        }
+
+
+def get_market_sentiment():
+    try:
+        idx_df = get_index_snapshot_multi()
+
+        index_targets = [
+            {"name": "上证综指", "ts_code": "000001.SH"},
+            {"name": "深证成指", "ts_code": "399001.SZ"},
+            {"name": "创业板指", "ts_code": "399006.SZ"},
+            {"name": "科创50", "ts_code": "000688.SH"},
+        ]
+
+        scores = []
+
+        for idx in index_targets:
+            row = pick_index_row(idx_df, idx["ts_code"])
+            if row is None:
+                continue
+
+            pct = row.get("涨跌幅")
+            if pct is None:
+                continue
+
+            pct = float(pct)
+
+            if pct > 2:
+                scores.append(8)
+            elif pct > 0:
+                scores.append(4)
+            elif pct < -2:
+                scores.append(-8)
+            elif pct < 0:
+                scores.append(-4)
+            else:
+                scores.append(0)
+
+        score = int(sum(scores) / len(scores)) if scores else 0
+
+        return {
+            "available": True,
+            "score": score,
+            "label": calc_sentiment_label(score),
+            "error": None,
+        }
+
+    except Exception as e:
+        return {
+            "available": False,
+            "score": 0,
+            "label": "中性",
+            "error": safe_text(e),
         }
 
