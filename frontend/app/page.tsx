@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 type ComponentScores = {
   trend_ma?: number;
@@ -90,6 +90,13 @@ type FavoriteItem = {
   name?: string | null;
   close?: number | null;
   label?: string | null;
+};
+
+type SearchItem = {
+  symbol: string;
+  ts_code: string;
+  name: string;
+  initials: string;
 };
 
 function formatDate(s: string) {
@@ -219,6 +226,10 @@ export default function HomePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [favorites, setFavorites] = useState<FavoriteItem[]>([]);
+  const [searchIndex, setSearchIndex] = useState<SearchItem[]>([]);
+  const [suggestions, setSuggestions] = useState<SearchItem[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     try {
@@ -236,6 +247,35 @@ export default function HomePage() {
     } catch {}
   }, [favorites]);
 
+  useEffect(() => {
+    fetch('/stock_search.json')
+      .then((r) => r.json())
+      .then((json) => {
+        if (Array.isArray(json)) setSearchIndex(json);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const q = symbol.trim().toLowerCase();
+    if (!q) {
+      setSuggestions([]);
+      return;
+    }
+
+    const matched = searchIndex
+      .filter((item) => {
+        return (
+          item.symbol.includes(q) ||
+          item.name.includes(symbol.trim()) ||
+          item.initials.startsWith(q)
+        );
+      })
+      .slice(0, 8);
+
+    setSuggestions(matched);
+  }, [symbol, searchIndex]);
+
   async function handleSearch(targetSymbol?: string) {
     const finalSymbol = (targetSymbol ?? symbol).trim();
     if (!finalSymbol) return;
@@ -244,6 +284,7 @@ export default function HomePage() {
     setError('');
     setData(null);
     setSymbol(finalSymbol);
+    setShowSuggestions(false);
 
     try {
       const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
@@ -308,6 +349,11 @@ export default function HomePage() {
     handleSearch('600519');
   }, []);
 
+  function chooseSuggestion(item: SearchItem) {
+    setSymbol(item.symbol);
+    handleSearch(item.symbol);
+  }
+
   function toggleFavorite() {
     const s = symbol.trim();
     if (!s) return;
@@ -319,9 +365,11 @@ export default function HomePage() {
       }
 
       const latest = data?.history?.[data.history.length - 1];
+      const matched = searchIndex.find((x) => x.symbol === s);
+
       const item: FavoriteItem = {
         symbol: s,
-        name: data?.symbol === s ? data?.name : null,
+        name: data?.symbol === s ? data?.name : matched?.name ?? null,
         close: data?.symbol === s ? latest?.close ?? null : null,
         label: data?.symbol === s ? data?.signal?.label ?? null : null,
       };
@@ -344,19 +392,42 @@ export default function HomePage() {
 
   return (
     <main className="min-h-screen max-w-7xl mx-auto p-6 bg-white text-black">
-      <h1 className="text-3xl font-bold mb-6 text-black">A股买卖点助手 V7</h1>
+      <h1 className="text-3xl font-bold mb-6 text-black">A股买卖点助手 V8</h1>
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
         <aside className="lg:col-span-1">
           <section className="border border-gray-400 rounded p-4 bg-white mb-6">
-            <div className="flex gap-2 mb-3">
+            <div className="relative mb-3">
               <input
-                className="border border-gray-500 rounded px-3 py-2 flex-1 bg-white text-black placeholder:text-gray-700"
+                ref={inputRef}
+                className="border border-gray-500 rounded px-3 py-2 w-full bg-white text-black placeholder:text-gray-700"
                 value={symbol}
-                onChange={(e) => setSymbol(e.target.value)}
-                placeholder="股票代码"
+                onChange={(e) => {
+                  setSymbol(e.target.value);
+                  setShowSuggestions(true);
+                }}
+                onFocus={() => setShowSuggestions(true)}
+                placeholder="股票代码 / 中文名 / 拼音首字母"
               />
+
+              {showSuggestions && suggestions.length > 0 && (
+                <div className="absolute z-10 mt-1 w-full bg-white border border-gray-300 rounded shadow">
+                  {suggestions.map((item) => (
+                    <button
+                      key={item.ts_code}
+                      onClick={() => chooseSuggestion(item)}
+                      className="block w-full text-left px-3 py-2 hover:bg-gray-100"
+                    >
+                      <div className="font-medium">{item.name}</div>
+                      <div className="text-sm text-gray-700">
+                        {item.symbol} · {item.initials}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
+
             <div className="flex gap-2">
               <button
                 onClick={() => handleSearch()}
