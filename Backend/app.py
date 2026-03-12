@@ -808,3 +808,15 @@ def get_market_sentiment():
             "error": safe_text(e),
         }
 
+
+def calc_sentiment_label(score: int):
+    if score >= 6:
+        return "偏热"
+    if score >= 2:
+        return "偏暖"
+    if score <= -6:
+        return "偏冷"
+    if score <= -2:
+        return "偏弱"
+    return "中性"
+
