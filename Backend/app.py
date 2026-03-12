@@ -28,8 +28,6 @@ def load_stock_names():
         with open(STOCK_NAME_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
-        market_sentiment = get_market_sentiment()
-
         return {}
 
 LOCAL_STOCK_NAMES = load_stock_names()
@@ -509,6 +507,8 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
             bench_hist_df,
             benchmark_info["name"]
         )
+
+        market_sentiment = get_market_sentiment()
 
         return {
             "symbol": symbol,
