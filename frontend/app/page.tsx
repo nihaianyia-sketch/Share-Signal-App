@@ -89,6 +89,14 @@ type RelativeStrengthData = {
   error?: string | null;
 };
 
+
+type MarketSentimentData = {
+  available?: boolean;
+  score?: number;
+  label?: string;
+  error?: string | null;
+};
+
 type HistoryResponse = {
   symbol?: string;
   name?: string | null;
@@ -97,6 +105,7 @@ type HistoryResponse = {
   signal?: SignalData;
   benchmark?: BenchmarkData;
   market_mood?: MarketMoodData;
+  market_sentiment?: MarketSentimentData;
   relative_strength?: RelativeStrengthData;
   error?: string;
   detail?: string;
@@ -349,6 +358,14 @@ export default function HomePage() {
         };
       }
 
+      if (json.market_sentiment) {
+        json.market_sentiment = {
+          ...json.market_sentiment,
+          label: safeText(json.market_sentiment.label),
+          error: safeText(json.market_sentiment.error),
+        };
+      }
+
       json.name = safeText(json.name);
 
       setData(json);
@@ -415,6 +432,7 @@ export default function HomePage() {
   const componentScores = data?.signal?.component_scores;
   const benchmark = data?.benchmark;
   const marketMood = data?.market_mood;
+  const marketSentiment = data?.market_sentiment;
   const relativeStrength = data?.relative_strength;
   const isFavorite = favorites.some((x) => x.symbol === symbol.trim());
 
@@ -577,7 +595,7 @@ export default function HomePage() {
 
               {marketMood && (
                 <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
-                  <h2 className="text-xl font-semibold mb-3">市场气氛</h2>
+                  <h2 className="text-xl font-semibold mb-3">指数气氛</h2>
                   {marketMood.available ? (
                     <>
                       <div
@@ -587,7 +605,7 @@ export default function HomePage() {
                       >
                         {marketMood.label}
                       </div>
-                      <ScoreBar title="市场气氛" score={marketMood.score ?? 0} />
+                      <ScoreBar title="指数气氛" score={marketMood.score ?? 0} />
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                         {(marketMood.indices || []).map((idx) => (
                           <div key={idx.ts_code} className="border border-gray-300 rounded p-3">
@@ -601,6 +619,28 @@ export default function HomePage() {
                   ) : (
                     <p className="text-gray-700">
                       暂不可用：{marketMood.error || '当前未获取到市场气氛数据'}
+                    </p>
+                  )}
+                </section>
+              )}
+
+              {marketSentiment && (
+                <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
+                  <h2 className="text-xl font-semibold mb-3">市场情绪指数</h2>
+                  {marketSentiment.available ? (
+                    <>
+                      <div
+                        className={`inline-block px-3 py-1 rounded-full border text-sm font-semibold mb-3 ${signalStyle(
+                          marketSentiment.label
+                        )}`}
+                      >
+                        {marketSentiment.label}
+                      </div>
+                      <ScoreBar title="市场情绪指数" score={marketSentiment.score ?? 0} />
+                    </>
+                  ) : (
+                    <p className="text-gray-700">
+                      暂不可用：{marketSentiment.error || '当前未获取到市场情绪数据'}
                     </p>
                   )}
                 </section>
