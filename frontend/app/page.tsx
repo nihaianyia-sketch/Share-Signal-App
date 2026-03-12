@@ -234,7 +234,7 @@ function componentTitle(key: keyof ComponentScores): string {
     breakout_20d: '20日突破',
     daily_strength: '当日强弱',
     kdj: 'KDJ',
-    relative_strength: '相对大盘强弱',
+    relative_strength: '相对强弱评分',
   };
   return map[key];
 }
@@ -608,7 +608,7 @@ export default function HomePage() {
 
               {relativeStrength && (
                 <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
-                  <h2 className="text-xl font-semibold mb-3">相对大盘强弱</h2>
+                  <h2 className="text-xl font-semibold mb-3">相对大盘强弱明细</h2>
                   {relativeStrength.available ? (
                     <>
                       <p>基准：{relativeStrength.benchmark_name || '-'}</p>
