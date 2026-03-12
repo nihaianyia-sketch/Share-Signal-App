@@ -92,6 +92,18 @@ def calc_macd(close: pd.Series):
     hist = macd - signal
     return macd, signal, hist
 
+
+def calc_kdj(df: pd.DataFrame, n: int = 9):
+    low_n = df["low"].rolling(n).min()
+    high_n = df["high"].rolling(n).max()
+    rsv = (df["close"] - low_n) / (high_n - low_n).replace(0, pd.NA) * 100
+    rsv = rsv.fillna(50)
+
+    k = rsv.ewm(com=2, adjust=False).mean()
+    d = k.ewm(com=2, adjust=False).mean()
+    j = 3 * k - 2 * d
+    return k, d, j
+
 def round_or_none(x, n=2):
     if pd.isna(x):
         return None
@@ -128,6 +140,11 @@ def calc_signal(df: pd.DataFrame):
     df["macd_signal"] = macd_signal
     df["macd_hist"] = macd_hist
 
+    kdj_k, kdj_d, kdj_j = calc_kdj(df)
+    df["kdj_k"] = kdj_k
+    df["kdj_d"] = kdj_d
+    df["kdj_j"] = kdj_j
+
     last = df.iloc[-1]
     prev = df.iloc[-2]
 
@@ -147,9 +164,11 @@ def calc_signal(df: pd.DataFrame):
         "price_vs_ma5": 0,
         "rsi": 0,
         "macd": 0,
+        "kdj": 0,
         "volume_price": 0,
         "breakout_20d": 0,
         "daily_strength": 0,
+        "relative_strength": 0,
     }
 
     if pd.notna(last["ma5"]) and pd.notna(last["ma10"]):
@@ -215,6 +234,28 @@ def calc_signal(df: pd.DataFrame):
             component_scores["macd"] = -3
             reasons.append("MACD 位于信号线之下")
 
+
+    if pd.notna(last["kdj_k"]) and pd.notna(last["kdj_d"]) and pd.notna(prev["kdj_k"]) and pd.notna(prev["kdj_d"]):
+        if last["kdj_k"] > last["kdj_d"] and prev["kdj_k"] <= prev["kdj_d"]:
+            component_scores["kdj"] = 5
+            reasons.append("KDJ 金叉")
+        elif last["kdj_k"] < last["kdj_d"] and prev["kdj_k"] >= prev["kdj_d"]:
+            component_scores["kdj"] = -5
+            reasons.append("KDJ 死叉")
+        elif last["kdj_k"] > last["kdj_d"]:
+            component_scores["kdj"] = 2
+            reasons.append("KDJ 多头")
+        elif last["kdj_k"] < last["kdj_d"]:
+            component_scores["kdj"] = -2
+            reasons.append("KDJ 空头")
+
+        if last["kdj_k"] < 20 and last["kdj_d"] < 20 and last["kdj_k"] > last["kdj_d"]:
+            component_scores["kdj"] += 2
+            reasons.append("KDJ 低位拐头")
+        elif last["kdj_k"] > 80 and last["kdj_d"] > 80 and last["kdj_k"] < last["kdj_d"]:
+            component_scores["kdj"] -= 2
+            reasons.append("KDJ 高位转弱")
+
     if pd.notna(vol_ratio_5) and pd.notna(last["pct_chg"]):
         if vol_ratio_5 > 1.8 and last["pct_chg"] > 0:
             component_scores["volume_price"] = 8
@@ -271,6 +312,9 @@ def calc_signal(df: pd.DataFrame):
         "macd": round_or_none(last["macd"]),
         "macd_signal": round_or_none(last["macd_signal"]),
         "macd_hist": round_or_none(last["macd_hist"]),
+        "kdj_k": round_or_none(last["kdj_k"]),
+        "kdj_d": round_or_none(last["kdj_d"]),
+        "kdj_j": round_or_none(last["kdj_j"]),
         "high_20": round_or_none(high_20),
         "low_20": round_or_none(low_20),
     }
@@ -483,6 +527,17 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
             benchmark["error"] = "指数接口不可用"
             market_mood["error"] = "指数接口不可用"
 
+        relative_strength = {
+            "available": False,
+            "benchmark_name": benchmark_info["name"],
+            "rs_day": None,
+            "rs_5": None,
+            "rs_10": None,
+            "rs_20": None,
+            "score": 0,
+            "error": "对应大盘历史数据暂不可用"
+        }
+
         return {
             "symbol": symbol,
             "name": stock_name,
@@ -491,6 +546,7 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
             "signal": signal,
             "benchmark": benchmark,
             "market_mood": market_mood,
+            "relative_strength": relative_strength,
         }
     except Exception as e:
         return {
