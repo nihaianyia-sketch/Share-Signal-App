@@ -794,9 +794,11 @@ def get_market_sentiment():
         else:
             index_move = 0
 
-        # 先占位，后面再接 breadth 数据
-        breadth_score = 0
-        limit_score = 0
+        breadth = get_market_breadth()
+        limits = get_limit_stats()
+
+        breadth_score = breadth["score"]
+        limit_score = limits["score"]
 
         total_score = round(index_move * 0.4 + breadth_score * 0.3 + limit_score * 0.3)
 
@@ -808,6 +810,12 @@ def get_market_sentiment():
                 "index_move": index_move,
                 "breadth": breadth_score,
                 "limit_up_down": limit_score
+            },
+            "stats": {
+                "up_count": breadth.get("up"),
+                "down_count": breadth.get("down"),
+                "limit_up": limits.get("limit_up"),
+                "limit_down": limits.get("limit_down")
             },
             "error": None
         }
@@ -829,4 +837,67 @@ def calc_sentiment_label(score: int):
     if score <= -2:
         return "偏弱"
     return "中性"
+
+
+def get_market_breadth():
+    try:
+        df = ak.stock_zh_a_spot_em()
+
+        pct = pd.to_numeric(df["涨跌幅"], errors="coerce")
+
+        up = int((pct > 0).sum())
+        down = int((pct < 0).sum())
+
+        total = up + down
+        if total == 0:
+            return {"score": 0, "up": up, "down": down}
+
+        ratio = (up - down) / total
+
+        score = int(ratio * 10)
+
+        return {
+            "score": score,
+            "up": up,
+            "down": down
+        }
+
+    except Exception:
+        return {
+            "score": 0,
+            "up": None,
+            "down": None
+        }
+
+
+def get_limit_stats():
+    try:
+        up_df = ak.stock_zt_pool_em()
+        up = len(up_df)
+
+    except Exception:
+        up = None
+
+    try:
+        down_df = ak.stock_zt_pool_dtgc_em()
+        down = len(down_df)
+
+    except Exception:
+        down = None
+
+    if up is None or down is None:
+        return {"score": 0, "limit_up": up, "limit_down": down}
+
+    total = up + down
+
+    if total == 0:
+        score = 0
+    else:
+        score = int((up - down) / total * 10)
+
+    return {
+        "score": score,
+        "limit_up": up,
+        "limit_down": down
+    }
 
