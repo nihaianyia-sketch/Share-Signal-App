@@ -10,6 +10,8 @@ type ComponentScores = {
   volume_price?: number;
   breakout_20d?: number;
   daily_strength?: number;
+  kdj?: number;
+  relative_strength?: number;
 };
 
 type SignalData = {
@@ -26,6 +28,9 @@ type SignalData = {
     macd?: number;
     macd_signal?: number;
     macd_hist?: number;
+    kdj_k?: number;
+    kdj_d?: number;
+    kdj_j?: number;
     high_20?: number;
     low_20?: number;
   };
@@ -73,6 +78,18 @@ type MarketMoodData = {
   error?: string | null;
 };
 
+
+type RelativeStrengthData = {
+  available?: boolean;
+  benchmark_name?: string;
+  rs_day?: number | null;
+  rs_5?: number | null;
+  rs_10?: number | null;
+  rs_20?: number | null;
+  score?: number;
+  error?: string | null;
+};
+
 type HistoryResponse = {
   symbol?: string;
   name?: string | null;
@@ -81,6 +98,7 @@ type HistoryResponse = {
   signal?: SignalData;
   benchmark?: BenchmarkData;
   market_mood?: MarketMoodData;
+  relative_strength?: RelativeStrengthData;
   error?: string;
   detail?: string;
 };
@@ -216,6 +234,8 @@ function componentTitle(key: keyof ComponentScores): string {
     volume_price: '量价关系',
     breakout_20d: '20日突破',
     daily_strength: '当日强弱',
+    kdj: 'KDJ',
+    relative_strength: '相对大盘强弱',
   };
   return map[key];
 }
@@ -388,6 +408,7 @@ export default function HomePage() {
   const componentScores = data?.signal?.component_scores;
   const benchmark = data?.benchmark;
   const marketMood = data?.market_mood;
+  const relativeStrength = data?.relative_strength;
   const isFavorite = favorites.some((x) => x.symbol === symbol.trim());
 
   return (
@@ -601,6 +622,9 @@ export default function HomePage() {
                     <IndicatorCard title="MACD" value={indicators.macd} />
                     <IndicatorCard title="MACD Signal" value={indicators.macd_signal} />
                     <IndicatorCard title="MACD Hist" value={indicators.macd_hist} />
+                    <IndicatorCard title="K" value={indicators.kdj_k} />
+                    <IndicatorCard title="D" value={indicators.kdj_d} />
+                    <IndicatorCard title="J" value={indicators.kdj_j} />
                     <IndicatorCard title="20日高点" value={indicators.high_20} />
                     <IndicatorCard title="20日低点" value={indicators.low_20} />
                   </div>
