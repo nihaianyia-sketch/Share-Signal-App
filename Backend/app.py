@@ -815,7 +815,9 @@ def get_market_sentiment():
                 "up_count": breadth.get("up"),
                 "down_count": breadth.get("down"),
                 "limit_up": limits.get("limit_up"),
-                "limit_down": limits.get("limit_down")
+                "limit_down": limits.get("limit_down"),
+                "breadth_error": breadth.get("error"),
+                "limit_error": limits.get("error")
             },
             "error": None
         }
@@ -842,6 +844,8 @@ def calc_sentiment_label(score: int):
 def get_market_breadth():
     try:
         df = ak.stock_zh_a_spot_em()
+        if df is None or df.empty or "涨跌幅" not in df.columns:
+            return {"score": 0, "up": None, "down": None, "error": "breadth source empty"}
 
         pct = pd.to_numeric(df["涨跌幅"], errors="coerce")
 
@@ -850,54 +854,66 @@ def get_market_breadth():
 
         total = up + down
         if total == 0:
-            return {"score": 0, "up": up, "down": down}
+            return {"score": 0, "up": up, "down": down, "error": None}
 
         ratio = (up - down) / total
-
-        score = int(ratio * 10)
+        score = clamp_score(round(ratio * 10))
 
         return {
             "score": score,
             "up": up,
-            "down": down
+            "down": down,
+            "error": None
         }
 
-    except Exception:
+    except Exception as e:
         return {
             "score": 0,
             "up": None,
-            "down": None
+            "down": None,
+            "error": safe_text(e)
         }
 
 
 def get_limit_stats():
+    up = None
+    down = None
+    up_err = None
+    down_err = None
+
     try:
         up_df = ak.stock_zt_pool_em()
-        up = len(up_df)
+        if up_df is not None:
+            up = len(up_df)
+    except Exception as e:
+        up_err = safe_text(e)
 
-    except Exception:
-        up = None
-
+    # 先试当前接口
     try:
         down_df = ak.stock_zt_pool_dtgc_em()
-        down = len(down_df)
-
-    except Exception:
-        down = None
+        if down_df is not None:
+            down = len(down_df)
+    except Exception as e:
+        down_err = safe_text(e)
 
     if up is None or down is None:
-        return {"score": 0, "limit_up": up, "limit_down": down}
+        return {
+            "score": 0,
+            "limit_up": up,
+            "limit_down": down,
+            "error": f"up_err={up_err}; down_err={down_err}"
+        }
 
     total = up + down
-
     if total == 0:
         score = 0
     else:
-        score = int((up - down) / total * 10)
+        score = clamp_score(round((up - down) / total * 10))
 
     return {
         "score": score,
         "limit_up": up,
-        "limit_down": down
+        "limit_down": down,
+        "error": None
     }
 
