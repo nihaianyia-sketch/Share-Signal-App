@@ -881,19 +881,21 @@ export default function HomePage() {
                           {marketSentiment.stats?.breadth_error && (
                             <p>涨跌家数数据源提示：{marketSentiment.stats.breadth_error}</p>
                           )}
-                          {marketSentiment.stats?.limit_error && (
-                            <p>涨停跌停数据源提示：{marketSentiment.stats.limit_error}</p>
-                          )}
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <p className="text-gray-700">
-                      暂不可用：{marketSentiment.error || '当前未获取到市场情绪数据'}
-                    </p>
-                  )}
+
+
+
+              {componentScores && (
+                <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
+                  <h2 className="text-xl font-semibold mb-4">单项技术评分</h2>
+                  {(
+                    Object.entries(componentScores) as [keyof ComponentScores, number][]
+                  ).map(([key, value]) => (
+                    <ScoreBar key={key} title={componentTitle(key)} score={value ?? 0} />
+                  ))}
                 </section>
               )}
+
+
 
               {relativeStrength && (
                 <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
@@ -902,10 +904,8 @@ export default function HomePage() {
                     <>
                       <p>基准：{relativeStrength.benchmark_name || '-'}</p>
                       <p className="text-xs text-gray-600 mt-1">
-                        定义：显示股票相对大盘在当日、5日、10日、20日的跑赢或跑输幅度；正值表示强于大盘，负值表示弱于大盘。综合评分已在上方“相对强弱评分”中展示，按 5日(50%)、10日(30%)、20日(20%) 计算。
+                        定义：显示股票相对大盘在当日、5日、10日、20日的跑赢或跑输幅度；正值表示强于大盘，负值表示弱于大盘。综合评分已在下方“单项技术评分”中的“相对强弱评分”条目展示，按 5日(50%)、10日(30%)、20日(20%) 计算。
                       </p>
-                      <div className="mt-3">
-                        </div>
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
                         <IndicatorCard title="当日RS" value={relativeStrength.rs_day} />
                         <IndicatorCard title="5日RS" value={relativeStrength.rs_5} />
@@ -920,19 +920,19 @@ export default function HomePage() {
                   )}
                 </section>
               )}
-
-              {componentScores && (
-                <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
-                  <h2 className="text-xl font-semibold mb-4">单项技术评分</h2>
-                  {(
-                    Object.entries(componentScores) as [keyof ComponentScores, number][]
-                  ).map(([key, value]) => (
-                    <ScoreBar key={key} title={componentTitle(key)} score={value ?? 0} />
-                  ))}
+                          {marketSentiment.stats?.limit_error && (
+                            <p>涨停跌停数据源提示：{marketSentiment.stats.limit_error}</p>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-gray-700">
+                      暂不可用：{marketSentiment.error || '当前未获取到市场情绪数据'}
+                    </p>
+                  )}
                 </section>
-              )}
-
-              {indicators && (
+              )}              {indicators && (
                 <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
                   <h2 className="text-xl font-semibold mb-3">技术指标</h2>
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
