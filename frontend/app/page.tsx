@@ -507,7 +507,47 @@ export default function HomePage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
         <aside className="lg:col-span-1">
-          <section className="border border-gray-400 rounded p-4 bg-white mb-6">
+          
+              {tradingDecision && statusJudgement && (
+                <section className="border-2 border-gray-500 rounded-lg p-5 mb-6 bg-gray-50 text-black">
+                  <h2 className="text-2xl font-bold mb-4">交易总览</h2>
+
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+
+                    <IndicatorCard
+                      title="交易决策"
+                      value={tradingDecision.action}
+                    />
+
+                    <IndicatorCard
+                      title="状态判断"
+                      value={statusJudgement.label}
+                    />
+
+                    <IndicatorCard
+                      title="市场情绪"
+                      value={marketSentiment?.label}
+                    />
+
+                    <IndicatorCard
+                      title="置信度"
+                      value={tradingDecision.confidence}
+                    />
+
+                    <IndicatorCard
+                      title="周期"
+                      value={tradingDecision.horizon}
+                    />
+
+                    <IndicatorCard
+                      title="综合评分"
+                      value={tradingDecision.composite_score}
+                    />
+
+                  </div>
+                </section>
+              )}
+<section className="border border-gray-400 rounded p-4 bg-white mb-6">
             <div className="relative mb-3">
               <input
                 ref={inputRef}
