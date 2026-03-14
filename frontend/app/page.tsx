@@ -904,7 +904,7 @@ export default function HomePage() {
                     <>
                       <p>基准：{relativeStrength.benchmark_name || '-'}</p>
                       <p className="text-xs text-gray-600 mt-1">
-                        定义：显示股票相对大盘在当日、5日、10日、20日的跑赢或跑输幅度；正值表示强于大盘，负值表示弱于大盘。综合评分已在下方“单项技术评分”中的“相对强弱评分”条目展示，按 5日(50%)、10日(30%)、20日(20%) 计算。
+                        定义：显示股票相对大盘在当日、5日、10日、20日的跑赢或跑输幅度；正值表示强于大盘，负值表示弱于大盘。综合评分已在上方“单项技术评分”中的“相对强弱评分”条目展示，按 5日(50%)、10日(30%)、20日(20%) 计算。
                       </p>
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
                         <IndicatorCard title="当日RS" value={relativeStrength.rs_day} />
