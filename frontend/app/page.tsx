@@ -124,6 +124,8 @@ type TradingDecisionData = {
   action?: string;
   bias?: string;
   confidence?: number;
+  horizon?: string;
+  execution_hint?: string;
   summary?: string;
   reasons?: string[];
   composite_score?: number;
@@ -420,6 +422,8 @@ export default function HomePage() {
           ...json.trading_decision,
           action: safeText(json.trading_decision.action),
           bias: safeText(json.trading_decision.bias),
+          horizon: safeText(json.trading_decision.horizon),
+          execution_hint: safeText(json.trading_decision.execution_hint),
           summary: safeText(json.trading_decision.summary),
           reasons: (json.trading_decision.reasons || []).map((r) => safeText(r)),
         };
@@ -623,9 +627,13 @@ export default function HomePage() {
                   )}`}>
                     {tradingDecision.action}
                   </div>
-                  <p><span className="font-semibold">方向偏向：</span>{tradingDecision.bias || '-'}</p>
-                  <p><span className="font-semibold">置信度：</span>{tradingDecision.confidence ?? '-'} / 100</p>
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-3">
+                    <IndicatorCard title="方向偏向" value={tradingDecision.bias} />
+                    <IndicatorCard title="置信度" value={tradingDecision.confidence} />
+                    <IndicatorCard title="适用周期" value={tradingDecision.horizon} />
+                  </div>
                   <p className="mt-2"><span className="font-semibold">一句话结论：</span>{tradingDecision.summary || '-'}</p>
+                  <p className="mt-2"><span className="font-semibold">执行提示：</span>{tradingDecision.execution_hint || '-'}</p>
                   <p className="mt-2"><span className="font-semibold">综合分：</span>{tradingDecision.composite_score ?? '-'}</p>
                   {tradingDecision.reasons && tradingDecision.reasons.length > 0 && (
                     <div className="mt-3">
