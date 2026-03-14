@@ -881,16 +881,29 @@ def get_limit_stats():
     up_err = None
     down_err = None
 
+    trade_date = None
     try:
-        up_df = ak.stock_zt_pool_em()
+        trade_hist = ak.tool_trade_date_hist_sina()
+        if trade_hist is not None and not trade_hist.empty:
+            dates = pd.to_datetime(trade_hist["trade_date"])
+            dates = dates[dates <= pd.Timestamp.today()]
+            if not dates.empty:
+                trade_date = dates.iloc[-1].strftime("%Y%m%d")
+    except Exception as e:
+        down_err = safe_text(e)
+
+    if trade_date is None:
+        trade_date = datetime.now().strftime("%Y%m%d")
+
+    try:
+        up_df = ak.stock_zt_pool_em(date=trade_date)
         if up_df is not None:
             up = len(up_df)
     except Exception as e:
         up_err = safe_text(e)
 
-    # 先试当前接口
     try:
-        down_df = ak.stock_zt_pool_dtgc_em()
+        down_df = ak.stock_zt_pool_dtgc_em(date=trade_date)
         if down_df is not None:
             down = len(down_df)
     except Exception as e:
@@ -901,7 +914,7 @@ def get_limit_stats():
             "score": 0,
             "limit_up": up,
             "limit_down": down,
-            "error": f"up_err={up_err}; down_err={down_err}"
+            "error": f"date={trade_date}; up_err={up_err}; down_err={down_err}"
         }
 
     total = up + down
