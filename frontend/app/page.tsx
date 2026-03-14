@@ -221,7 +221,7 @@ function PriceLineChart({ data }: { data: HistoryItem[] }) {
   }, [data]);
 
   return (
-    <div className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
+    <div className="border border-gray-400 rounded p-4 mb-4 bg-white text-black">
       <h2 className="text-xl font-semibold mb-3 text-black">最近20日收盘价走势</h2>
       <svg viewBox="0 0 760 260" className="w-full h-auto">
         <line x1="24" y1="236" x2="736" y2="236" stroke="#666" opacity="0.6" />
@@ -580,41 +580,44 @@ export default function HomePage() {
         <aside className="lg:col-span-1">
           
               {tradingDecision && statusJudgement && (
-                <section className="border-2 border-gray-500 rounded-lg p-5 mb-6 bg-gray-50 text-black">
-                  <h2 className="text-2xl font-bold mb-4">交易总览</h2>
+                <section className="border-2 border-gray-500 rounded-lg p-5 mb-4 bg-gray-50 text-black">
+                  <div className="flex items-start justify-between gap-4 mb-4">
+                    <div>
+                      <h2 className="text-2xl font-bold">交易总览</h2>
+                      <p className="text-sm text-gray-600 mt-1">
+                        用于快速汇总当前股票的交易结论、状态结构、市场环境与资金倾向。
+                      </p>
+                    </div>
+                    <div className={`inline-block px-3 py-1 rounded-full border text-sm font-semibold ${signalStyle(
+                      tradingDecision.action
+                    )}`}>
+                      {tradingDecision.action}
+                    </div>
+                  </div>
 
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
+                    <IndicatorCard title="交易决策" value={tradingDecision.action} />
+                    <IndicatorCard title="状态判断" value={statusJudgement.label} />
+                    <IndicatorCard title="市场情绪" value={marketSentiment?.label} />
+                    <IndicatorCard title="资金趋势" value={capitalFlow?.trend_label} />
+                    <IndicatorCard title="相对强弱综合评分" value={relativeStrength?.score} />
+                    <IndicatorCard title="置信度" value={tradingDecision.confidence} />
+                  </div>
 
-                    <IndicatorCard
-                      title="交易决策"
-                      value={tradingDecision.action}
-                    />
+                  <div className="grid grid-cols-2 md:grid-cols-2 gap-3 mb-4">
+                    <IndicatorCard title="适用周期" value={tradingDecision.horizon} />
+                    <IndicatorCard title="方向偏向" value={tradingDecision.bias} />
+                  </div>
 
-                    <IndicatorCard
-                      title="状态判断"
-                      value={statusJudgement.label}
-                    />
-
-                    <IndicatorCard
-                      title="市场情绪"
-                      value={marketSentiment?.label}
-                    />
-
-                    <IndicatorCard
-                      title="置信度"
-                      value={tradingDecision.confidence}
-                    />
-
-                    <IndicatorCard
-                      title="周期"
-                      value={tradingDecision.horizon}
-                    />
-
-                    <IndicatorCard
-                      title="综合评分"
-                      value={tradingDecision.composite_score}
-                    />
-
+                  <div className="border border-gray-300 rounded p-3 bg-white">
+                    <p className="text-sm">
+                      <span className="font-semibold">一句话结论：</span>
+                      {tradingDecision.summary || '-'}
+                    </p>
+                    <p className="text-sm mt-2">
+                      <span className="font-semibold">执行提示：</span>
+                      {tradingDecision.execution_hint || '-'}
+                    </p>
                   </div>
                 </section>
               )}
@@ -717,7 +720,7 @@ export default function HomePage() {
 
           {data && latest && (
             <>
-              <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
+              <section className="border border-gray-400 rounded p-4 mb-4 bg-white text-black">
                 <h2 className="text-xl font-semibold mb-3">
                   {data.name || '未命名股票'} {data.symbol ? `(${data.symbol})` : ''}
                 </h2>
@@ -731,7 +734,7 @@ export default function HomePage() {
               </section>
 
               {capitalFlow && capitalFlow.available && (
-                <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
+                <section className="border border-gray-400 rounded p-4 mb-4 bg-white text-black">
                   <h2 className="text-xl font-semibold mb-3">资金信号</h2>
                   <p className="text-xs text-gray-600 mb-3">
                     定义：反映主力、大单与中小单资金流向。红色表示净流入，绿色表示净流出，中线为 0 轴；单日资金说明当天买卖强弱，3日/5日累计用于判断资金趋势是否持续。
@@ -769,7 +772,7 @@ export default function HomePage() {
               )}
 
               {tradingDecision && (
-                <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
+                <section className="border border-gray-400 rounded p-4 mb-4 bg-white text-black">
                   <h2 className="text-xl font-semibold mb-3">交易决策</h2>
                   <p className="text-xs text-gray-600 mb-3">
                     定义：根据技术指标、相对强弱、市场情绪、资金流和状态判断生成的综合建议；仅作辅助参考，不构成投资建议。
@@ -801,7 +804,7 @@ export default function HomePage() {
               )}
 
               {statusJudgement && (
-                <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
+                <section className="border border-gray-400 rounded p-4 mb-4 bg-white text-black">
                   <h2 className="text-xl font-semibold mb-3">状态判断</h2>
                   <p className="text-xs text-gray-600 mb-3">
                     定义：综合均线结构、MACD、相对强弱和波动率，对当前行情阶段做结构判断，如趋势、震荡或超卖反弹。
@@ -829,7 +832,7 @@ export default function HomePage() {
               )}
 
               {data.signal && (
-                <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
+                <section className="border border-gray-400 rounded p-4 mb-4 bg-white text-black">
                   <h2 className="text-xl font-semibold mb-3">交易参考信号</h2>
                   <div
                     className={`inline-block px-3 py-1 rounded-full border text-sm font-semibold mb-3 ${signalStyle(
@@ -851,7 +854,7 @@ export default function HomePage() {
               )}
 
               {benchmark && (
-                <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
+                <section className="border border-gray-400 rounded p-4 mb-4 bg-white text-black">
                   <h2 className="text-xl font-semibold mb-3">对应大盘</h2>
                   {benchmark.available ? (
                     <>
@@ -868,7 +871,7 @@ export default function HomePage() {
               )}
 
               {marketMood && (
-                <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
+                <section className="border border-gray-400 rounded p-4 mb-4 bg-white text-black">
                   <h2 className="text-xl font-semibold mb-3">指数气氛</h2>
                   {marketMood.available ? (
                     <>
@@ -899,7 +902,7 @@ export default function HomePage() {
               )}
 
               {marketSentiment && (
-                <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
+                <section className="border border-gray-400 rounded p-4 mb-4 bg-white text-black">
                   <h2 className="text-xl font-semibold mb-3">市场情绪指数</h2>
                   <p className="text-xs text-gray-600 mb-3">
                     定义：综合指数涨跌、涨跌家数、涨停跌停结构，反映市场整体风险偏好；分数越高，说明短线情绪越活跃。
@@ -947,7 +950,7 @@ export default function HomePage() {
 
 
               {componentScores && (
-                <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
+                <section className="border border-gray-400 rounded p-4 mb-4 bg-white text-black">
                   <h2 className="text-xl font-semibold mb-4">单项技术评分</h2>
                   <ScoreBar
                     title="相对强弱综合评分"
@@ -964,7 +967,7 @@ export default function HomePage() {
 
 
               {relativeStrength && (
-                <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
+                <section className="border border-gray-400 rounded p-4 mb-4 bg-white text-black">
                   <h2 className="text-xl font-semibold mb-3">相对大盘强弱明细</h2>
                   {relativeStrength.available ? (
                     <>
@@ -999,7 +1002,7 @@ export default function HomePage() {
                   )}
                 </section>
               )}              {indicators && (
-                <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
+                <section className="border border-gray-400 rounded p-4 mb-4 bg-white text-black">
                   <h2 className="text-xl font-semibold mb-3">技术指标</h2>
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                     <IndicatorCard title="MA5" value={indicators.ma5} />
