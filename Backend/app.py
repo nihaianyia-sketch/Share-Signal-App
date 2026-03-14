@@ -145,6 +145,9 @@ def calc_signal(df: pd.DataFrame):
     df["kdj_d"] = kdj_d
     df["kdj_j"] = kdj_j
 
+    atr14 = calc_atr(df, 14)
+    df["atr14"] = atr14
+
     last = df.iloc[-1]
     prev = df.iloc[-2]
 
@@ -155,6 +158,12 @@ def calc_signal(df: pd.DataFrame):
     vol_ratio_5 = (
         last["vol"] / last["vol5"]
         if pd.notna(last["vol"]) and pd.notna(last["vol5"]) and last["vol5"] != 0
+        else pd.NA
+    )
+
+    atr_ratio = (
+        last["atr14"] / last["close"]
+        if pd.notna(last["atr14"]) and pd.notna(last["close"]) and last["close"] != 0
         else pd.NA
     )
 
@@ -169,6 +178,7 @@ def calc_signal(df: pd.DataFrame):
         "breakout_20d": 0,
         "daily_strength": 0,
         "relative_strength": 0,
+        "volatility": 0,
     }
 
     if pd.notna(last["ma5"]) and pd.notna(last["ma10"]):
@@ -288,6 +298,14 @@ def calc_signal(df: pd.DataFrame):
             component_scores["daily_strength"] = -2
             reasons.append("最新收盘低于前一日")
 
+    if pd.notna(atr_ratio):
+        if atr_ratio > 0.04:
+            component_scores["volatility"] = 3
+            reasons.append("ATR波动率较高")
+        elif atr_ratio < 0.015:
+            component_scores["volatility"] = -2
+            reasons.append("ATR波动率较低")
+
     component_scores = {k: clamp_score(v) for k, v in component_scores.items()}
     score = int(sum(component_scores.values()))
 
@@ -315,6 +333,8 @@ def calc_signal(df: pd.DataFrame):
         "kdj_k": round_or_none(last["kdj_k"]),
         "kdj_d": round_or_none(last["kdj_d"]),
         "kdj_j": round_or_none(last["kdj_j"]),
+        "atr14": round_or_none(last["atr14"]),
+        "atr_ratio": round_or_none(atr_ratio, 4),
         "high_20": round_or_none(high_20),
         "low_20": round_or_none(low_20),
     }
@@ -509,6 +529,7 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
         )
 
         market_sentiment = get_market_sentiment()
+        status_judgement = calc_status_judgement(hist_df, signal, relative_strength)
 
         return {
             "symbol": symbol,
@@ -520,6 +541,7 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
             "market_mood": market_mood,
             "relative_strength": relative_strength,
             "market_sentiment": market_sentiment,
+            "status_judgement": status_judgement,
         }
     except Exception as e:
         return {
@@ -941,4 +963,108 @@ def get_limit_stats():
         "limit_down": down,
         "error": None
     }
+
+
+def calc_atr(df: pd.DataFrame, period: int = 14):
+    high = pd.to_numeric(df["high"], errors="coerce")
+    low = pd.to_numeric(df["low"], errors="coerce")
+    close = pd.to_numeric(df["close"], errors="coerce")
+
+    prev_close = close.shift(1)
+
+    tr1 = high - low
+    tr2 = (high - prev_close).abs()
+    tr3 = (low - prev_close).abs()
+
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr = tr.rolling(period).mean()
+
+    return atr
+
+
+def calc_status_judgement(df: pd.DataFrame, signal: dict, relative_strength: dict):
+    try:
+        last = df.iloc[-1]
+        atr_ratio = signal.get("indicators", {}).get("atr_ratio")
+        rs_score = relative_strength.get("score", 0) if relative_strength else 0
+        rs_day = relative_strength.get("rs_day") if relative_strength else None
+        label = "震荡整理"
+        reasons = []
+
+        ma5 = signal.get("indicators", {}).get("ma5")
+        ma10 = signal.get("indicators", {}).get("ma10")
+        ma20 = signal.get("indicators", {}).get("ma20")
+        rsi14 = signal.get("indicators", {}).get("rsi14")
+        macd = signal.get("indicators", {}).get("macd")
+        macd_signal = signal.get("indicators", {}).get("macd_signal")
+        kdj_k = signal.get("indicators", {}).get("kdj_k")
+        kdj_d = signal.get("indicators", {}).get("kdj_d")
+        close = signal.get("indicators", {}).get("close")
+
+        if (
+            ma5 is not None and ma10 is not None and ma20 is not None
+            and macd is not None and macd_signal is not None
+            and close is not None
+            and ma5 > ma10 > ma20
+            and close > ma5
+            and macd > macd_signal
+            and rs_score >= 2
+        ):
+            label = "强势上升"
+            reasons = ["均线多头", "MACD偏强", "相对大盘偏强"]
+
+        elif (
+            ma5 is not None and ma10 is not None and ma20 is not None
+            and macd is not None and macd_signal is not None
+            and ma5 < ma10 < ma20
+            and macd < macd_signal
+            and rs_score <= -2
+        ):
+            label = "下行趋势"
+            reasons = ["均线空头", "MACD偏弱", "相对大盘偏弱"]
+
+        elif (
+            rsi14 is not None and kdj_k is not None and kdj_d is not None
+            and close is not None and ma5 is not None
+            and rsi14 < 35
+            and kdj_k > kdj_d
+            and close >= ma5
+        ):
+            label = "超卖反弹观察"
+            reasons = ["RSI偏低", "KDJ修复", "价格回到短均线上方"]
+
+        elif (
+            close is not None and ma5 is not None
+            and kdj_k is not None and kdj_d is not None
+            and close > ma5
+            and kdj_k > kdj_d
+            and (rs_day is not None and rs_day > 0)
+        ):
+            label = "趋势修复"
+            reasons = ["短线站上MA5", "KDJ偏强", "当日跑赢大盘"]
+
+        elif atr_ratio is not None and atr_ratio > 0.04:
+            label = "高波动博弈"
+            reasons = ["ATR波动率较高", "短线波动明显放大"]
+
+        elif atr_ratio is not None and atr_ratio < 0.015:
+            label = "低波整理"
+            reasons = ["ATR波动率较低", "市场偏盘整"]
+
+        else:
+            reasons = ["趋势与动量信号混合", "暂以整理看待"]
+
+        return {
+            "label": label,
+            "reasons": reasons,
+            "atr_ratio": atr_ratio,
+            "rs_score": rs_score,
+        }
+    except Exception as e:
+        return {
+            "label": "未知",
+            "reasons": [safe_text(e)],
+            "atr_ratio": None,
+            "rs_score": 0,
+        }
 
