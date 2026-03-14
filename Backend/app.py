@@ -1461,8 +1461,17 @@ def get_capital_flow(symbol: str):
 
         df = ak.stock_individual_fund_flow(stock=symbol)
 
-        if df is None or df.empty:
-            return {"available": False, "error": "empty dataframe"}
+        if df is None:
+            return {
+                "available": False,
+                "error": "资金流接口返回空"
+            }
+
+        if getattr(df, "empty", True):
+            return {
+                "available": False,
+                "error": "资金流接口当前无数据"
+            }
 
         def to_num(v):
             if v is None:
@@ -1484,14 +1493,31 @@ def get_capital_flow(symbol: str):
         medium_col = "中单净流入-净额"
         small_col = "小单净流入-净额"
 
+        if main_col not in df.columns:
+            return {
+                "available": False,
+                "error": "资金流字段缺失"
+            }
+
         for col in [main_col, super_col, big_col, medium_col, small_col]:
             if col in df.columns:
                 df[col] = df[col].apply(to_num)
 
-        row = df.iloc[-1]
+        if len(df) == 0:
+            return {
+                "available": False,
+                "error": "资金流数据为空"
+            }
 
-        main_3d = df[main_col].tail(3).sum() if main_col in df.columns and len(df) >= 1 else None
-        main_5d = df[main_col].tail(5).sum() if main_col in df.columns and len(df) >= 1 else None
+        row = df.iloc[-1]
+        if row is None:
+            return {
+                "available": False,
+                "error": "资金流最新行为空"
+            }
+
+        main_3d = df[main_col].tail(3).sum() if main_col in df.columns else None
+        main_5d = df[main_col].tail(5).sum() if main_col in df.columns else None
 
         latest_main = to_num(row.get(main_col))
 
@@ -1504,21 +1530,19 @@ def get_capital_flow(symbol: str):
         else:
             trend_label = "资金分化"
 
-        result = {
+        return {
             "available": True,
             "main_inflow": latest_main,
-            "super_inflow": to_num(row.get(super_col)),
-            "big_inflow": to_num(row.get(big_col)),
-            "medium_inflow": to_num(row.get(medium_col)),
-            "small_inflow": to_num(row.get(small_col)),
+            "super_inflow": to_num(row.get(super_col)) if super_col in df.columns else None,
+            "big_inflow": to_num(row.get(big_col)) if big_col in df.columns else None,
+            "medium_inflow": to_num(row.get(medium_col)) if medium_col in df.columns else None,
+            "small_inflow": to_num(row.get(small_col)) if small_col in df.columns else None,
             "main_inflow_3d": to_num(main_3d),
             "main_inflow_5d": to_num(main_5d),
             "trend_label": trend_label,
             "raw_date": row.get("日期") or row.get("trade_date"),
             "error": None,
         }
-
-        return result
 
     except Exception as e:
         return {
