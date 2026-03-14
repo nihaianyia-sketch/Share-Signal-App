@@ -535,7 +535,8 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
             signal,
             relative_strength,
             market_sentiment,
-            status_judgement
+            status_judgement,
+            capital_flow
         )
 
         return {
@@ -1081,7 +1082,7 @@ def calc_status_judgement(df: pd.DataFrame, signal: dict, relative_strength: dic
         }
 
 
-def calc_trading_decision(signal: dict, relative_strength: dict, market_sentiment: dict, status_judgement: dict):
+def calc_trading_decision(signal: dict, relative_strength: dict, market_sentiment: dict, status_judgement: dict, capital_flow: dict):
     try:
         signal_score = signal.get("score", 0) if signal else 0
         rs_score = relative_strength.get("score", 0) if relative_strength else 0
@@ -1107,6 +1108,21 @@ def calc_trading_decision(signal: dict, relative_strength: dict, market_sentimen
         summary = "信号分化，暂不适合激进参与。"
 
         composite = 0.5 * signal_score + 0.3 * rs_score + 0.2 * market_score
+
+        capital_score = 0
+        if capital_flow and capital_flow.get("available"):
+            main_flow = capital_flow.get("main_inflow")
+
+            if main_flow is not None:
+                if main_flow > 0:
+                    capital_score = 2
+                    reasons.append("主力资金净流入")
+                elif main_flow < 0:
+                    capital_score = -2
+                    reasons.append("主力资金净流出")
+
+        composite = composite + 0.2 * capital_score
+
 
         if ma5 is not None and ma10 is not None and ma20 is not None:
             if ma5 > ma10 > ma20:
