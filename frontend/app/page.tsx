@@ -230,14 +230,17 @@ function PriceLineChart({ data }: { data: HistoryItem[] }) {
 function IndicatorCard({
   title,
   value,
+  note,
 }: {
   title: string;
   value: string | number | undefined | null;
+  note?: string;
 }) {
   return (
     <div className="border border-gray-300 rounded p-3 bg-white">
       <div className="text-sm font-semibold text-gray-700 mb-1">{title}</div>
       <div className="text-lg font-bold text-black">{value ?? '-'}</div>
+      {note && <div className="text-xs text-gray-500 mt-1">{note}</div>}
     </div>
   );
 }
@@ -671,6 +674,9 @@ export default function HomePage() {
               {tradingDecision && (
                 <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
                   <h2 className="text-xl font-semibold mb-3">交易决策</h2>
+                  <p className="text-xs text-gray-600 mb-3">
+                    定义：根据技术指标、相对强弱、市场情绪、资金流和状态判断生成的综合建议；仅作辅助参考，不构成投资建议。
+                  </p>
                   <div className={`inline-block px-3 py-1 rounded-full border text-sm font-semibold mb-3 ${signalStyle(
                     tradingDecision.bias
                   )}`}>
@@ -700,6 +706,9 @@ export default function HomePage() {
               {statusJudgement && (
                 <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
                   <h2 className="text-xl font-semibold mb-3">状态判断</h2>
+                  <p className="text-xs text-gray-600 mb-3">
+                    定义：综合均线结构、MACD、相对强弱和波动率，对当前行情阶段做结构判断，如趋势、震荡或超卖反弹。
+                  </p>
                   <div className={`inline-block px-3 py-1 rounded-full border text-sm font-semibold mb-3 ${signalStyle(
                     statusJudgement.label
                   )}`}>
@@ -795,6 +804,9 @@ export default function HomePage() {
               {marketSentiment && (
                 <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
                   <h2 className="text-xl font-semibold mb-3">市场情绪指数</h2>
+                  <p className="text-xs text-gray-600 mb-3">
+                    定义：综合指数涨跌、涨跌家数、涨停跌停结构，反映市场整体风险偏好；分数越高，说明短线情绪越活跃。
+                  </p>
                   {marketSentiment.available ? (
                     <>
                       <div
@@ -854,9 +866,11 @@ export default function HomePage() {
                   {relativeStrength.available ? (
                     <>
                       <p>基准：{relativeStrength.benchmark_name || '-'}</p>
+                      <p className="text-xs text-gray-600 mt-1">
+                        定义：显示股票相对大盘在当日、5日、10日、20日的跑赢或跑输幅度；正值表示强于大盘，负值表示弱于大盘。综合评分已在上方“相对强弱评分”中展示，按 5日(50%)、10日(30%)、20日(20%) 计算。
+                      </p>
                       <div className="mt-3">
-                        <ScoreBar title="相对大盘强弱" score={relativeStrength.score ?? 0} />
-                      </div>
+                        </div>
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
                         <IndicatorCard title="当日RS" value={relativeStrength.rs_day} />
                         <IndicatorCard title="5日RS" value={relativeStrength.rs_5} />
@@ -898,8 +912,16 @@ export default function HomePage() {
                     <IndicatorCard title="K" value={indicators.kdj_k} />
                     <IndicatorCard title="D" value={indicators.kdj_d} />
                     <IndicatorCard title="J" value={indicators.kdj_j} />
-                    <IndicatorCard title="ATR14" value={indicators.atr14} />
-                    <IndicatorCard title="ATR比率" value={indicators.atr_ratio} />
+                    <IndicatorCard
+                      title="ATR14"
+                      value={indicators.atr14}
+                      note="最近14日平均真实波动幅度，数值越大表示波动越大。"
+                    />
+                    <IndicatorCard
+                      title="ATR比率"
+                      value={indicators.atr_ratio}
+                      note="ATR14 ÷ 当前收盘价；越高说明波动越大，机会和风险都更高。"
+                    />
                     <IndicatorCard title="20日高点" value={indicators.high_20} />
                     <IndicatorCard title="20日低点" value={indicators.low_20} />
                   </div>
@@ -939,6 +961,17 @@ export default function HomePage() {
                   </table>
                 </div>
               </section>
+              <section className="border border-gray-400 rounded p-4 mt-6 bg-white text-black">
+                <h2 className="text-xl font-semibold mb-3">指标说明</h2>
+                <div className="space-y-3 text-sm text-gray-800 leading-relaxed">
+                  <p><span className="font-semibold">ATR：</span>衡量波动，不判断方向。ATR高说明波动放大，ATR低说明更偏整理。</p>
+                  <p><span className="font-semibold">相对大盘强弱：</span>股票涨跌幅减去基准指数涨跌幅；正值表示跑赢大盘，负值表示跑输大盘。</p>
+                  <p><span className="font-semibold">市场情绪：</span>综合指数涨跌、涨跌家数和涨停跌停结构，反映市场整体风险偏好。</p>
+                  <p><span className="font-semibold">状态判断：</span>识别当前处于趋势、震荡还是超卖修复阶段。</p>
+                  <p><span className="font-semibold">交易决策：</span>综合技术、市场、资金和相对强弱后的操作建议。</p>
+                </div>
+              </section>
+
             </>
           )}
         </section>
