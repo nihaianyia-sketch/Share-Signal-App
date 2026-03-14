@@ -138,6 +138,10 @@ type CapitalFlow = {
   big_inflow?: number;
   medium_inflow?: number;
   small_inflow?: number;
+  main_inflow_3d?: number;
+  main_inflow_5d?: number;
+  trend_label?: string;
+  error?: string | null;
 };
 
 type HistoryResponse = {
@@ -150,6 +154,7 @@ type HistoryResponse = {
   market_mood?: MarketMoodData;
   market_sentiment?: MarketSentimentData;
   relative_strength?: RelativeStrengthData;
+  capital_flow?: CapitalFlow;
   status_judgement?: StatusJudgementData;
   trading_decision?: TradingDecisionData;
   error?: string;
@@ -509,6 +514,7 @@ export default function HomePage() {
   const marketMood = data?.market_mood;
   const marketSentiment = data?.market_sentiment;
   const relativeStrength = data?.relative_strength;
+  const capitalFlow = data?.capital_flow;
   const statusJudgement = data?.status_judgement;
   const tradingDecision = data?.trading_decision;
   const isFavorite = favorites.some((x) => x.symbol === symbol.trim());
@@ -670,6 +676,35 @@ export default function HomePage() {
                 <p>成交量：{latest.vol}</p>
                 <p>成交额：{latest.amount}</p>
               </section>
+
+              {capitalFlow && capitalFlow.available && (
+                <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
+                  <h2 className="text-xl font-semibold mb-3">资金信号</h2>
+                  <p className="text-xs text-gray-600 mb-3">
+                    定义：反映主力、大单与中小单资金流向。单日资金说明当天买卖强弱，3日/5日累计用于判断资金趋势是否持续。
+                  </p>
+
+                  <div className={`inline-block px-3 py-1 rounded-full border text-sm font-semibold mb-3 ${signalStyle(
+                    capitalFlow.trend_label
+                  )}`}>
+                    {capitalFlow.trend_label || '未知'}
+                  </div>
+
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                    <IndicatorCard title="主力资金" value={capitalFlow.main_inflow} note="当日主力净流入/流出" />
+                    <IndicatorCard title="3日累计" value={capitalFlow.main_inflow_3d} note="最近3日主力资金累计" />
+                    <IndicatorCard title="5日累计" value={capitalFlow.main_inflow_5d} note="最近5日主力资金累计" />
+                    <IndicatorCard title="资金趋势" value={capitalFlow.trend_label} note="单日与5日资金综合判断" />
+                  </div>
+
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <IndicatorCard title="超大单" value={capitalFlow.super_inflow} />
+                    <IndicatorCard title="大单" value={capitalFlow.big_inflow} />
+                    <IndicatorCard title="中单" value={capitalFlow.medium_inflow} />
+                    <IndicatorCard title="小单" value={capitalFlow.small_inflow} />
+                  </div>
+                </section>
+              )}
 
               {tradingDecision && (
                 <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
