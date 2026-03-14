@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 import os
+
 import json
 from datetime import datetime, timedelta
 
@@ -546,7 +547,10 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
             "benchmark": benchmark,
             "market_mood": market_mood,
             "relative_strength": relative_strength,
+            
             "market_sentiment": market_sentiment,
+            "capital_flow": get_capital_flow(symbol),
+
             "status_judgement": status_judgement,
             "trading_decision": trading_decision,
         }
@@ -1212,5 +1216,38 @@ def calc_trading_decision(signal: dict, relative_strength: dict, market_sentimen
             "summary": "交易决策生成失败",
             "reasons": [safe_text(e)],
             "composite_score": 0,
+        }
+
+
+
+def get_capital_flow(symbol: str):
+    """
+    获取资金流向
+    """
+    try:
+        import akshare as ak
+
+        code = symbol
+
+        df = ak.stock_individual_fund_flow(stock=code)
+
+        if df is None or df.empty:
+            return {"available": False}
+
+        row = df.iloc[-1]
+
+        return {
+            "available": True,
+            "main_inflow": float(row.get("主力净流入", 0)),
+            "super_inflow": float(row.get("超大单净流入", 0)),
+            "big_inflow": float(row.get("大单净流入", 0)),
+            "medium_inflow": float(row.get("中单净流入", 0)),
+            "small_inflow": float(row.get("小单净流入", 0)),
+        }
+
+    except Exception as e:
+        return {
+            "available": False,
+            "error": safe_text(e)
         }
 
