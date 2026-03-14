@@ -530,6 +530,7 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
         )
 
         market_sentiment = get_market_sentiment()
+        capital_flow = get_capital_flow(symbol)
         status_judgement = calc_status_judgement(hist_df, signal, relative_strength)
         trading_decision = calc_trading_decision(
             signal,
