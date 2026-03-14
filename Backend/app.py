@@ -1221,29 +1221,45 @@ def calc_trading_decision(signal: dict, relative_strength: dict, market_sentimen
 
 
 def get_capital_flow(symbol: str):
-    """
-    获取资金流向
-    """
     try:
         import akshare as ak
+        import pandas as pd
 
-        code = symbol
-
-        df = ak.stock_individual_fund_flow(stock=code)
+        df = ak.stock_individual_fund_flow(stock=symbol)
 
         if df is None or df.empty:
-            return {"available": False}
+            return {"available": False, "error": "empty dataframe"}
 
         row = df.iloc[-1]
 
-        return {
+        def to_num(v):
+            if v is None:
+                return None
+            if isinstance(v, str):
+                v = v.replace(",", "").strip()
+                if v == "":
+                    return None
+            try:
+                return float(v)
+            except Exception:
+                return None
+
+        result = {
             "available": True,
-            "main_inflow": float(row.get("主力净流入", 0)),
-            "super_inflow": float(row.get("超大单净流入", 0)),
-            "big_inflow": float(row.get("大单净流入", 0)),
-            "medium_inflow": float(row.get("中单净流入", 0)),
-            "small_inflow": float(row.get("小单净流入", 0)),
+            "main_inflow": to_num(row.get("主力净流入")),
+            "super_inflow": to_num(row.get("超大单净流入")),
+            "big_inflow": to_num(row.get("大单净流入")),
+            "medium_inflow": to_num(row.get("中单净流入")),
+            "small_inflow": to_num(row.get("小单净流入")),
+            "raw_date": row.get("日期") or row.get("trade_date"),
+            "columns": list(df.columns),
         }
+
+        if all(result[k] is None for k in ["main_inflow", "super_inflow", "big_inflow", "medium_inflow", "small_inflow"]):
+            result["available"] = False
+            result["error"] = "all inflow fields are null"
+
+        return result
 
     except Exception as e:
         return {
