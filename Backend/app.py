@@ -531,6 +531,7 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
 
         market_sentiment = get_market_sentiment()
         capital_flow = get_capital_flow(symbol)
+        sector_strength = get_sector_strength(symbol)
         status_judgement = calc_status_judgement(hist_df, signal, relative_strength)
         trading_decision = calc_trading_decision(
             signal,
@@ -550,6 +551,7 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
             "market_mood": market_mood,
             "relative_strength": relative_strength,
             
+            "sector_strength": sector_strength,
             "market_sentiment": market_sentiment,
             "capital_flow": get_capital_flow(symbol),
 
@@ -670,13 +672,199 @@ def get_index_history_daily_em(ts_code: str, start_date: str, end_date: str):
     except Exception:
         return None
 
-def get_index_history_multi(ts_code: str, start_date: str, end_date: str):
-    for fn in [get_index_history_ak_hist, get_index_history_daily_em]:
-        df = fn(ts_code, start_date, end_date)
-        if df is not None and not df.empty:
-            return df
-    return None
+import time
+import pandas as pd
 
+import os
+import time
+import pandas as pd
+
+CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
+
+import os
+import time
+import pandas as pd
+
+CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
+
+
+
+
+def get_index_history_multi(ts_code: str, start_date: str, end_date: str):
+    symbol_map_hist = {
+        "000001.SH": "000001",
+        "399001.SZ": "399001",
+        "399006.SZ": "399006",
+        "000688.SH": "000688",
+    }
+
+    symbol_map_daily = {
+        "000001.SH": "sh000001",
+        "399001.SZ": "sz399001",
+        "399006.SZ": "sz399006",
+        "000688.SH": "sh000688",
+    }
+
+    symbol_map_yf = {
+        "000001.SH": "000001.SS",
+        "399001.SZ": "399001.SZ",
+        "399006.SZ": "399006.SZ",
+        "000688.SH": "000688.SS",
+    }
+
+    cache_dir = os.path.join(os.path.dirname(__file__), "cache")
+    cache_file = os.path.join(cache_dir, f"index_{ts_code.replace('.', '_')}.csv")
+
+    def normalize_df(df):
+        if df is None or df.empty:
+            return None
+
+        df = df.copy()
+
+        rename_map = {
+            "日期": "date",
+            "开盘": "open",
+            "收盘": "close",
+            "最高": "high",
+            "最低": "low",
+            "成交量": "volume",
+            "成交额": "amount",
+        }
+        df = df.rename(columns=rename_map)
+
+        if "trade_date" not in df.columns:
+            if "date" in df.columns:
+                df["trade_date"] = pd.to_datetime(df["date"]).dt.strftime("%Y%m%d")
+            elif df.index.name is not None or isinstance(df.index, pd.DatetimeIndex):
+                df["trade_date"] = pd.to_datetime(df.index).strftime("%Y%m%d")
+            else:
+                return None
+
+        for col in ["open", "close", "high", "low", "volume", "amount"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        df["trade_date"] = df["trade_date"].astype(str)
+        df = df.sort_values("trade_date").reset_index(drop=True)
+
+        if "pct_chg" not in df.columns:
+            df["pct_chg"] = df["close"].pct_change() * 100
+        else:
+            df["pct_chg"] = pd.to_numeric(df["pct_chg"], errors="coerce")
+
+        df = df[(df["trade_date"] >= start_date) & (df["trade_date"] <= end_date)]
+
+        if df.empty:
+            return None
+
+        keep_cols = [c for c in ["trade_date", "open", "close", "high", "low", "volume", "amount", "pct_chg"] if c in df.columns]
+        return df[keep_cols].reset_index(drop=True)
+
+    # source 1
+    symbol1 = symbol_map_hist.get(ts_code)
+    if symbol1 is not None:
+        for attempt in range(2):
+            try:
+                import akshare as ak
+                df = ak.index_zh_a_hist(symbol=symbol1, period="daily")
+                df = normalize_df(df)
+                if df is not None:
+                    os.makedirs(cache_dir, exist_ok=True)
+                    df.to_csv(cache_file, index=False)
+                    return df
+            except Exception as e:
+                if attempt == 1:
+                    print("source1 failed:", e)
+                time.sleep(1)
+
+    # source 2
+    symbol2 = symbol_map_daily.get(ts_code)
+    if symbol2 is not None:
+        for attempt in range(2):
+            try:
+                import akshare as ak
+                df = ak.stock_zh_index_daily_em(symbol=symbol2)
+                df = normalize_df(df)
+                if df is not None:
+                    os.makedirs(cache_dir, exist_ok=True)
+                    df.to_csv(cache_file, index=False)
+                    return df
+            except Exception as e:
+                if attempt == 1:
+                    print("source2 failed:", e)
+                time.sleep(1)
+
+    # source 3: yahoo finance
+    symbol3 = symbol_map_yf.get(ts_code)
+    if symbol3 is not None:
+        for attempt in range(2):
+            try:
+                import yfinance as yf
+
+                df = yf.download(
+                    symbol3,
+                    start=pd.to_datetime(start_date).strftime("%Y-%m-%d"),
+                    end=(pd.to_datetime(end_date) + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+                    auto_adjust=False,
+                    progress=False,
+                    group_by="column",
+                )
+
+                if df is None or df.empty:
+                    raise Exception("empty dataframe from yfinance")
+
+                # 处理可能的 MultiIndex columns
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+
+                df = df.rename(columns={
+                    "Open": "open",
+                    "Close": "close",
+                    "High": "high",
+                    "Low": "low",
+                    "Volume": "volume",
+                }).copy()
+
+                needed = ["open", "close", "high", "low", "volume"]
+                for col in needed:
+                    if col not in df.columns:
+                        raise Exception(f"missing {col} column from yfinance")
+
+                df["amount"] = pd.NA
+                df["trade_date"] = pd.to_datetime(df.index).strftime("%Y%m%d")
+
+                for col in ["open", "close", "high", "low", "volume"]:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+
+                df = df.sort_values("trade_date").reset_index(drop=True)
+                df["pct_chg"] = df["close"].pct_change() * 100
+                df = df[(df["trade_date"] >= start_date) & (df["trade_date"] <= end_date)]
+
+                keep_cols = ["trade_date", "open", "close", "high", "low", "volume", "amount", "pct_chg"]
+                df = df[keep_cols]
+
+                if df is not None and not df.empty:
+                    os.makedirs(cache_dir, exist_ok=True)
+                    df.to_csv(cache_file, index=False)
+                    return df.reset_index(drop=True)
+
+            except Exception as e:
+                if attempt == 1:
+                    print("source3 failed:", e)
+                time.sleep(1)
+
+    # cache
+    if os.path.exists(cache_file):
+        try:
+            df = pd.read_csv(cache_file)
+            df = normalize_df(df)
+            if df is not None:
+                print("using cached index history", ts_code)
+                return df
+        except Exception as e:
+            print("cache failed:", e)
+
+    return None
 
 def calc_relative_strength(stock_df: pd.DataFrame, bench_df: pd.DataFrame, benchmark_name: str):
     try:
@@ -1113,14 +1301,21 @@ def calc_trading_decision(signal: dict, relative_strength: dict, market_sentimen
         capital_score = 0
         if capital_flow and capital_flow.get("available"):
             main_flow = capital_flow.get("main_inflow")
+            main_flow_5d = capital_flow.get("main_inflow_5d")
 
-            if main_flow is not None:
-                if main_flow > 0:
-                    capital_score = 2
-                    reasons.append("主力资金净流入")
+            if main_flow is not None and main_flow_5d is not None:
+                if main_flow > 0 and main_flow_5d > 0:
+                    capital_score = 3
+                    reasons.append("主力资金单日与5日累计均为净流入")
+                elif main_flow < 0 and main_flow_5d < 0:
+                    capital_score = -3
+                    reasons.append("主力资金单日与5日累计均为净流出")
+                elif main_flow > 0:
+                    capital_score = 1
+                    reasons.append("主力资金单日净流入")
                 elif main_flow < 0:
-                    capital_score = -2
-                    reasons.append("主力资金净流出")
+                    capital_score = -1
+                    reasons.append("主力资金单日净流出")
 
         composite = composite + 0.2 * capital_score
 
@@ -1240,20 +1435,17 @@ def calc_trading_decision(signal: dict, relative_strength: dict, market_sentimen
 def get_capital_flow(symbol: str):
     try:
         import akshare as ak
-        import pandas as pd
 
         df = ak.stock_individual_fund_flow(stock=symbol)
 
         if df is None or df.empty:
             return {"available": False, "error": "empty dataframe"}
 
-        row = df.iloc[-1]
-
         def to_num(v):
             if v is None:
                 return None
             if isinstance(v, str):
-                v = v.replace(",", "").strip()
+                v = v.replace(",", "").replace("%", "").strip()
                 if v == "":
                     return None
             try:
@@ -1261,20 +1453,47 @@ def get_capital_flow(symbol: str):
             except Exception:
                 return None
 
+        df = df.copy()
+
+        main_col = "主力净流入-净额"
+        super_col = "超大单净流入-净额"
+        big_col = "大单净流入-净额"
+        medium_col = "中单净流入-净额"
+        small_col = "小单净流入-净额"
+
+        for col in [main_col, super_col, big_col, medium_col, small_col]:
+            if col in df.columns:
+                df[col] = df[col].apply(to_num)
+
+        row = df.iloc[-1]
+
+        main_3d = df[main_col].tail(3).sum() if main_col in df.columns and len(df) >= 1 else None
+        main_5d = df[main_col].tail(5).sum() if main_col in df.columns and len(df) >= 1 else None
+
+        latest_main = to_num(row.get(main_col))
+
+        if latest_main is None:
+            trend_label = "未知"
+        elif latest_main > 0 and (main_5d is not None and main_5d > 0):
+            trend_label = "资金偏多"
+        elif latest_main < 0 and (main_5d is not None and main_5d < 0):
+            trend_label = "资金偏空"
+        else:
+            trend_label = "资金分化"
+
         result = {
             "available": True,
-            "main_inflow": to_num(row.get("主力净流入-净额")),
-            "super_inflow": to_num(row.get("超大单净流入-净额")),
-            "big_inflow": to_num(row.get("大单净流入-净额")),
-            "medium_inflow": to_num(row.get("中单净流入-净额")),
-            "small_inflow": to_num(row.get("小单净流入-净额")),
+            "main_inflow": latest_main,
+            "super_inflow": to_num(row.get(super_col)),
+            "big_inflow": to_num(row.get(big_col)),
+            "medium_inflow": to_num(row.get(medium_col)),
+            "small_inflow": to_num(row.get(small_col)),
+            "main_inflow_3d": to_num(main_3d),
+            "main_inflow_5d": to_num(main_5d),
+            "trend_label": trend_label,
             "raw_date": row.get("日期") or row.get("trade_date"),
-            "columns": list(df.columns),
+            "error": None,
         }
-
-        if all(result[k] is None for k in ["main_inflow", "super_inflow", "big_inflow", "medium_inflow", "small_inflow"]):
-            result["available"] = False
-            result["error"] = "all inflow fields are null"
 
         return result
 
@@ -1283,4 +1502,245 @@ def get_capital_flow(symbol: str):
             "available": False,
             "error": safe_text(e)
         }
+
+
+def _safe_to_float(v):
+    try:
+        if v is None:
+            return None
+        if isinstance(v, str):
+            v = v.replace(",", "").replace("%", "").strip()
+            if v == "":
+                return None
+        return float(v)
+    except Exception:
+        return None
+
+
+def get_stock_sector(symbol: str):
+    cache_dir = os.path.join(os.path.dirname(__file__), "cache")
+    cache_file = os.path.join(cache_dir, "sector_cons.csv")
+
+    # source 1: AKShare industry constituents
+    try:
+        import akshare as ak
+
+        # 行业列表
+        board_df = ak.stock_board_industry_name_em()
+        if board_df is not None and not board_df.empty:
+            os.makedirs(cache_dir, exist_ok=True)
+
+            all_rows = []
+            for _, row in board_df.iterrows():
+                board_name = row.get("板块名称")
+                if not board_name:
+                    continue
+                try:
+                    cons = ak.stock_board_industry_cons_em(symbol=board_name)
+                    if cons is not None and not cons.empty:
+                        cons = cons.copy()
+                        cons["所属板块"] = board_name
+                        all_rows.append(cons)
+                except Exception:
+                    continue
+
+            if all_rows:
+                cons_df = pd.concat(all_rows, ignore_index=True)
+                cons_df.to_csv(cache_file, index=False)
+
+                code_cols = [c for c in ["代码", "证券代码", "股票代码"] if c in cons_df.columns]
+                name_cols = [c for c in ["名称", "股票名称"] if c in cons_df.columns]
+
+                if code_cols:
+                    code_col = code_cols[0]
+                    cons_df[code_col] = cons_df[code_col].astype(str).str.zfill(6)
+                    hit = cons_df[cons_df[code_col] == str(symbol).zfill(6)]
+                    if not hit.empty:
+                        return {
+                            "available": True,
+                            "sector_name": hit.iloc[0].get("所属板块"),
+                            "stock_name": hit.iloc[0].get(name_cols[0]) if name_cols else None,
+                            "error": None,
+                        }
+    except Exception:
+        pass
+
+    # source 2: cache
+    if os.path.exists(cache_file):
+        try:
+            cons_df = pd.read_csv(cache_file)
+            code_cols = [c for c in ["代码", "证券代码", "股票代码"] if c in cons_df.columns]
+            name_cols = [c for c in ["名称", "股票名称"] if c in cons_df.columns]
+            if code_cols:
+                code_col = code_cols[0]
+                cons_df[code_col] = cons_df[code_col].astype(str).str.zfill(6)
+                hit = cons_df[cons_df[code_col] == str(symbol).zfill(6)]
+                if not hit.empty:
+                    return {
+                        "available": True,
+                        "sector_name": hit.iloc[0].get("所属板块"),
+                        "stock_name": hit.iloc[0].get(name_cols[0]) if name_cols else None,
+                        "error": None,
+                    }
+        except Exception as e:
+            return {"available": False, "error": safe_text(e)}
+
+    return {"available": False, "error": "未获取到所属板块"}
+
+
+def get_sector_strength(symbol: str):
+    cache_dir = os.path.join(os.path.dirname(__file__), "cache")
+    sector_info = get_stock_sector(symbol)
+
+    if not sector_info.get("available"):
+        return {
+            "available": False,
+            "sector_name": None,
+            "pct_chg_day": None,
+            "pct_chg_5d": None,
+            "score": 0,
+            "label": "未知",
+            "error": sector_info.get("error"),
+        }
+
+    sector_name = sector_info.get("sector_name")
+    cache_file = os.path.join(cache_dir, f"sector_{sector_name}.csv")
+
+    def score_from_changes(day_chg, chg_5d):
+        score = 0
+        if day_chg is not None:
+            if day_chg >= 2:
+                score += 4
+            elif day_chg >= 0.8:
+                score += 2
+            elif day_chg <= -2:
+                score -= 4
+            elif day_chg <= -0.8:
+                score -= 2
+
+        if chg_5d is not None:
+            if chg_5d >= 5:
+                score += 4
+            elif chg_5d >= 2:
+                score += 2
+            elif chg_5d <= -5:
+                score -= 4
+            elif chg_5d <= -2:
+                score -= 2
+
+        score = max(-10, min(10, score))
+        if score >= 6:
+            label = "强势"
+        elif score >= 2:
+            label = "偏强"
+        elif score <= -6:
+            label = "弱势"
+        elif score <= -2:
+            label = "偏弱"
+        else:
+            label = "中性"
+        return score, label
+
+    # source 1: AKShare board history
+    try:
+        import akshare as ak
+
+        hist = ak.stock_board_industry_hist_em(symbol=sector_name, adjust="")
+        if hist is not None and not hist.empty:
+            hist = hist.copy()
+            hist = hist.rename(columns={
+                "日期": "date",
+                "开盘": "open",
+                "收盘": "close",
+                "最高": "high",
+                "最低": "low",
+                "涨跌幅": "pct_chg",
+            })
+
+            if "date" in hist.columns:
+                hist["trade_date"] = pd.to_datetime(hist["date"]).dt.strftime("%Y%m%d")
+
+            if "close" in hist.columns:
+                hist["close"] = pd.to_numeric(hist["close"], errors="coerce")
+            if "pct_chg" in hist.columns:
+                hist["pct_chg"] = pd.to_numeric(hist["pct_chg"], errors="coerce")
+
+            hist = hist.sort_values("trade_date").reset_index(drop=True)
+
+            if "close" in hist.columns and len(hist) >= 6:
+                last_close = hist["close"].iloc[-1]
+                prev_5_close = hist["close"].iloc[-6]
+                chg_5d = ((last_close / prev_5_close) - 1) * 100 if pd.notna(last_close) and pd.notna(prev_5_close) and prev_5_close != 0 else None
+            else:
+                chg_5d = None
+
+            pct_chg_day = _safe_to_float(hist["pct_chg"].iloc[-1]) if "pct_chg" in hist.columns and len(hist) > 0 else None
+
+            os.makedirs(cache_dir, exist_ok=True)
+            hist.to_csv(cache_file, index=False)
+
+            score, label = score_from_changes(pct_chg_day, chg_5d)
+
+            return {
+                "available": True,
+                "sector_name": sector_name,
+                "pct_chg_day": round_or_none(pct_chg_day),
+                "pct_chg_5d": round_or_none(chg_5d),
+                "score": score,
+                "label": label,
+                "error": None,
+            }
+    except Exception:
+        pass
+
+    # source 2: cache
+    if os.path.exists(cache_file):
+        try:
+            hist = pd.read_csv(cache_file)
+            hist = hist.sort_values("trade_date").reset_index(drop=True)
+
+            if "close" in hist.columns:
+                hist["close"] = pd.to_numeric(hist["close"], errors="coerce")
+            if "pct_chg" in hist.columns:
+                hist["pct_chg"] = pd.to_numeric(hist["pct_chg"], errors="coerce")
+
+            if len(hist) >= 6:
+                last_close = hist["close"].iloc[-1]
+                prev_5_close = hist["close"].iloc[-6]
+                chg_5d = ((last_close / prev_5_close) - 1) * 100 if pd.notna(last_close) and pd.notna(prev_5_close) and prev_5_close != 0 else None
+            else:
+                chg_5d = None
+
+            pct_chg_day = _safe_to_float(hist["pct_chg"].iloc[-1]) if "pct_chg" in hist.columns and len(hist) > 0 else None
+            score, label = score_from_changes(pct_chg_day, chg_5d)
+
+            return {
+                "available": True,
+                "sector_name": sector_name,
+                "pct_chg_day": round_or_none(pct_chg_day),
+                "pct_chg_5d": round_or_none(chg_5d),
+                "score": score,
+                "label": label,
+                "error": None,
+            }
+        except Exception as e:
+            return {
+                "available": False,
+                "sector_name": sector_name,
+                "pct_chg_day": None,
+                "pct_chg_5d": None,
+                "score": 0,
+                "label": "未知",
+                "error": safe_text(e),
+            }
+
+    return {
+        "available": False,
+        "sector_name": sector_name,
+        "pct_chg_day": None,
+        "pct_chg_5d": None,
+        "score": 0,
+        "label": "未知",
+        "error": "板块历史暂不可用",
+    }
 
