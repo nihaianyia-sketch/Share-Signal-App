@@ -866,9 +866,12 @@ def get_index_history_multi(ts_code: str, start_date: str, end_date: str):
 
     return None
 
-def calc_relative_strength(stock_df: pd.DataFrame, bench_df: pd.DataFrame, benchmark_name: str):
+
+def calc_relative_strength(stock_df, bench_df, benchmark_name):
     try:
-        if stock_df is None or stock_df.empty or bench_df is None or bench_df.empty:
+        import pandas as pd
+
+        if stock_df is None or bench_df is None:
             return {
                 "available": False,
                 "benchmark_name": benchmark_name,
@@ -877,8 +880,88 @@ def calc_relative_strength(stock_df: pd.DataFrame, bench_df: pd.DataFrame, bench
                 "rs_10": None,
                 "rs_20": None,
                 "score": 0,
-                "error": "对应大盘历史数据暂不可用"
+                "error": "缺少股票或指数数据"
             }
+
+        df = pd.merge(
+            stock_df[["trade_date","close"]],
+            bench_df[["trade_date","close"]],
+            on="trade_date",
+            suffixes=("_stock","_bench")
+        ).sort_values("trade_date")
+
+        if len(df) < 2:
+            return {
+                "available": False,
+                "benchmark_name": benchmark_name,
+                "rs_day": None,
+                "rs_5": None,
+                "rs_10": None,
+                "rs_20": None,
+                "score": 0,
+                "error": "对应大盘历史数据不足"
+            }
+
+        df["ret_stock"] = df["close_stock"].pct_change()
+        df["ret_bench"] = df["close_bench"].pct_change()
+        df["rs"] = (df["ret_stock"] - df["ret_bench"]) * 100
+
+        rs_day = df["rs"].iloc[-1]
+
+        def window_rs(n):
+            if len(df) >= n+1:
+                s = df["close_stock"].iloc[-1] / df["close_stock"].iloc[-(n+1)] - 1
+                b = df["close_bench"].iloc[-1] / df["close_bench"].iloc[-(n+1)] - 1
+                return (s - b) * 100
+            return None
+
+        rs_5  = window_rs(5)
+        rs_10 = window_rs(10)
+        rs_20 = window_rs(20)
+
+        values = []
+        weights = []
+
+        if rs_5 is not None:
+            values.append(rs_5); weights.append(0.5)
+        if rs_10 is not None:
+            values.append(rs_10); weights.append(0.3)
+        if rs_20 is not None:
+            values.append(rs_20); weights.append(0.2)
+
+        if values:
+            score_raw = sum(v*w for v,w in zip(values,weights)) / sum(weights)
+        else:
+            score_raw = rs_day
+
+        score = int(round(score_raw / 2)) if score_raw is not None else 0
+
+        error = None
+        if rs_5 is None or rs_10 is None or rs_20 is None:
+            error = "部分周期数据不足"
+
+        return {
+            "available": True,
+            "benchmark_name": benchmark_name,
+            "rs_day": round(rs_day,2) if rs_day is not None else None,
+            "rs_5": round(rs_5,2) if rs_5 is not None else None,
+            "rs_10": round(rs_10,2) if rs_10 is not None else None,
+            "rs_20": round(rs_20,2) if rs_20 is not None else None,
+            "score": score,
+            "error": error
+        }
+
+    except Exception as e:
+        return {
+            "available": False,
+            "benchmark_name": benchmark_name,
+            "rs_day": None,
+            "rs_5": None,
+            "rs_10": None,
+            "rs_20": None,
+            "score": 0,
+            "error": str(e)
+        }
 
         s = stock_df.copy()[["trade_date", "close", "pct_chg"]]
         b = bench_df.copy()[["trade_date", "close", "pct_chg"]]
