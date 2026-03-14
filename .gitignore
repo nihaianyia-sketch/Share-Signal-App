@@ -8,3 +8,7 @@ __pycache__/
 .vscode/
 Backend/cache/
 requirements.txt
+__pycache__/
+.venv/
+.vscode/
+Backend/cache/
