@@ -31,6 +31,8 @@ type SignalData = {
     kdj_k?: number;
     kdj_d?: number;
     kdj_j?: number;
+    atr14?: number;
+    atr_ratio?: number;
     high_20?: number;
     low_20?: number;
   };
@@ -110,6 +112,23 @@ type MarketSentimentData = {
   error?: string | null;
 };
 
+
+type StatusJudgementData = {
+  label?: string;
+  reasons?: string[];
+  atr_ratio?: number | null;
+  rs_score?: number | null;
+};
+
+type TradingDecisionData = {
+  action?: string;
+  bias?: string;
+  confidence?: number;
+  summary?: string;
+  reasons?: string[];
+  composite_score?: number;
+};
+
 type HistoryResponse = {
   symbol?: string;
   name?: string | null;
@@ -120,6 +139,8 @@ type HistoryResponse = {
   market_mood?: MarketMoodData;
   market_sentiment?: MarketSentimentData;
   relative_strength?: RelativeStrengthData;
+  status_judgement?: StatusJudgementData;
+  trading_decision?: TradingDecisionData;
   error?: string;
   detail?: string;
 };
@@ -386,6 +407,24 @@ export default function HomePage() {
         };
       }
 
+      if (json.status_judgement) {
+        json.status_judgement = {
+          ...json.status_judgement,
+          label: safeText(json.status_judgement.label),
+          reasons: (json.status_judgement.reasons || []).map((r) => safeText(r)),
+        };
+      }
+
+      if (json.trading_decision) {
+        json.trading_decision = {
+          ...json.trading_decision,
+          action: safeText(json.trading_decision.action),
+          bias: safeText(json.trading_decision.bias),
+          summary: safeText(json.trading_decision.summary),
+          reasons: (json.trading_decision.reasons || []).map((r) => safeText(r)),
+        };
+      }
+
       json.name = safeText(json.name);
 
       setData(json);
@@ -454,6 +493,8 @@ export default function HomePage() {
   const marketMood = data?.market_mood;
   const marketSentiment = data?.market_sentiment;
   const relativeStrength = data?.relative_strength;
+  const statusJudgement = data?.status_judgement;
+  const tradingDecision = data?.trading_decision;
   const isFavorite = favorites.some((x) => x.symbol === symbol.trim());
 
   return (
@@ -573,6 +614,56 @@ export default function HomePage() {
                 <p>成交量：{latest.vol}</p>
                 <p>成交额：{latest.amount}</p>
               </section>
+
+              {tradingDecision && (
+                <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
+                  <h2 className="text-xl font-semibold mb-3">交易决策</h2>
+                  <div className={`inline-block px-3 py-1 rounded-full border text-sm font-semibold mb-3 ${signalStyle(
+                    tradingDecision.bias
+                  )}`}>
+                    {tradingDecision.action}
+                  </div>
+                  <p><span className="font-semibold">方向偏向：</span>{tradingDecision.bias || '-'}</p>
+                  <p><span className="font-semibold">置信度：</span>{tradingDecision.confidence ?? '-'} / 100</p>
+                  <p className="mt-2"><span className="font-semibold">一句话结论：</span>{tradingDecision.summary || '-'}</p>
+                  <p className="mt-2"><span className="font-semibold">综合分：</span>{tradingDecision.composite_score ?? '-'}</p>
+                  {tradingDecision.reasons && tradingDecision.reasons.length > 0 && (
+                    <div className="mt-3">
+                      <p className="font-semibold mb-2">主要依据：</p>
+                      <ul className="list-disc pl-5 space-y-1">
+                        {tradingDecision.reasons.map((reason, idx) => (
+                          <li key={idx}>{reason}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </section>
+              )}
+
+              {statusJudgement && (
+                <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
+                  <h2 className="text-xl font-semibold mb-3">状态判断</h2>
+                  <div className={`inline-block px-3 py-1 rounded-full border text-sm font-semibold mb-3 ${signalStyle(
+                    statusJudgement.label
+                  )}`}>
+                    {statusJudgement.label}
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-2 gap-3 mb-3">
+                    <IndicatorCard title="ATR比率" value={statusJudgement.atr_ratio} />
+                    <IndicatorCard title="相对强弱分" value={statusJudgement.rs_score} />
+                  </div>
+                  {statusJudgement.reasons && statusJudgement.reasons.length > 0 && (
+                    <div>
+                      <p className="font-semibold mb-2">状态依据：</p>
+                      <ul className="list-disc pl-5 space-y-1">
+                        {statusJudgement.reasons.map((reason, idx) => (
+                          <li key={idx}>{reason}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </section>
+              )}
 
               {data.signal && (
                 <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
@@ -750,6 +841,8 @@ export default function HomePage() {
                     <IndicatorCard title="K" value={indicators.kdj_k} />
                     <IndicatorCard title="D" value={indicators.kdj_d} />
                     <IndicatorCard title="J" value={indicators.kdj_j} />
+                    <IndicatorCard title="ATR14" value={indicators.atr14} />
+                    <IndicatorCard title="ATR比率" value={indicators.atr_ratio} />
                     <IndicatorCard title="20日高点" value={indicators.high_20} />
                     <IndicatorCard title="20日低点" value={indicators.low_20} />
                   </div>
