@@ -94,6 +94,19 @@ type MarketSentimentData = {
   available?: boolean;
   score?: number;
   label?: string;
+  components?: {
+    index_move?: number;
+    breadth?: number;
+    limit_up_down?: number;
+  };
+  stats?: {
+    up_count?: number | null;
+    down_count?: number | null;
+    limit_up?: number | null;
+    limit_down?: number | null;
+    breadth_error?: string | null;
+    limit_error?: string | null;
+  };
   error?: string | null;
 };
 
@@ -363,6 +376,13 @@ export default function HomePage() {
           ...json.market_sentiment,
           label: safeText(json.market_sentiment.label),
           error: safeText(json.market_sentiment.error),
+          stats: json.market_sentiment.stats
+            ? {
+                ...json.market_sentiment.stats,
+                breadth_error: safeText(json.market_sentiment.stats.breadth_error),
+                limit_error: safeText(json.market_sentiment.stats.limit_error),
+              }
+            : undefined,
         };
       }
 
@@ -636,7 +656,41 @@ export default function HomePage() {
                       >
                         {marketSentiment.label}
                       </div>
-                      <ScoreBar title="市场情绪指数" score={marketSentiment.score ?? 0} />
+
+                      <ScoreBar title="市场情绪总分" score={marketSentiment.score ?? 0} />
+
+                      <div className="mt-4">
+                        <ScoreBar
+                          title="指数涨跌"
+                          score={marketSentiment.components?.index_move ?? 0}
+                        />
+                        <ScoreBar
+                          title="涨跌家数"
+                          score={marketSentiment.components?.breadth ?? 0}
+                        />
+                        <ScoreBar
+                          title="涨停跌停"
+                          score={marketSentiment.components?.limit_up_down ?? 0}
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
+                        <IndicatorCard title="上涨家数" value={marketSentiment.stats?.up_count} />
+                        <IndicatorCard title="下跌家数" value={marketSentiment.stats?.down_count} />
+                        <IndicatorCard title="涨停数" value={marketSentiment.stats?.limit_up} />
+                        <IndicatorCard title="跌停数" value={marketSentiment.stats?.limit_down} />
+                      </div>
+
+                      {(marketSentiment.stats?.breadth_error || marketSentiment.stats?.limit_error) && (
+                        <div className="mt-4 text-sm text-gray-600">
+                          {marketSentiment.stats?.breadth_error && (
+                            <p>涨跌家数数据源提示：{marketSentiment.stats.breadth_error}</p>
+                          )}
+                          {marketSentiment.stats?.limit_error && (
+                            <p>涨停跌停数据源提示：{marketSentiment.stats.limit_error}</p>
+                          )}
+                        </div>
+                      )}
                     </>
                   ) : (
                     <p className="text-gray-700">
