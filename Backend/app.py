@@ -817,30 +817,45 @@ def get_index_history_multi(ts_code: str, start_date: str, end_date: str):
                     print("source2 failed:", e)
                 time.sleep(1)
 
-    # source 3: yahoo finance
+    
+    # source 3: yahoo finance (direct CSV download, more stable than yfinance.download)
     symbol3 = symbol_map_yf.get(ts_code)
     if symbol3 is not None:
         for attempt in range(2):
             try:
-                import yfinance as yf
+                import requests
+                import io
+                import time as _time
 
-                df = yf.download(
-                    symbol3,
-                    start=pd.to_datetime(start_date).strftime("%Y-%m-%d"),
-                    end=(pd.to_datetime(end_date) + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
-                    auto_adjust=False,
-                    progress=False,
-                    group_by="column",
+                start_ts = int(pd.Timestamp(start_date).timestamp())
+                end_ts = int((pd.Timestamp(end_date) + pd.Timedelta(days=1)).timestamp())
+
+                url = f"https://query1.finance.yahoo.com/v7/finance/download/{symbol3}"
+
+                params = {
+                    "period1": start_ts,
+                    "period2": end_ts,
+                    "interval": "1d",
+                    "events": "history",
+                    "includeAdjustedClose": "true",
+                }
+
+                r = requests.get(
+                    url,
+                    params=params,
+                    timeout=15,
+                    headers={"User-Agent": "Mozilla/5.0"},
                 )
 
-                if df is None or df.empty:
-                    raise Exception("empty dataframe from yfinance")
+                r.raise_for_status()
 
-                # 处理可能的 MultiIndex columns
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+                df = pd.read_csv(io.StringIO(r.text))
+
+                if df is None or df.empty:
+                    raise Exception("empty yahoo dataframe")
 
                 df = df.rename(columns={
+                    "Date": "date",
                     "Open": "open",
                     "Close": "close",
                     "High": "high",
@@ -848,25 +863,23 @@ def get_index_history_multi(ts_code: str, start_date: str, end_date: str):
                     "Volume": "volume",
                 }).copy()
 
-                needed = ["open", "close", "high", "low", "volume"]
-                for col in needed:
-                    if col not in df.columns:
-                        raise Exception(f"missing {col} column from yfinance")
-
                 df["amount"] = pd.NA
-                df["trade_date"] = pd.to_datetime(df.index).strftime("%Y%m%d")
+                df["trade_date"] = pd.to_datetime(df["date"]).dt.strftime("%Y%m%d")
 
                 for col in ["open", "close", "high", "low", "volume"]:
-                    df[col] = pd.to_numeric(df[col], errors="coerce")
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors="coerce")
 
                 df = df.sort_values("trade_date").reset_index(drop=True)
+
                 df["pct_chg"] = df["close"].pct_change() * 100
+
                 df = df[(df["trade_date"] >= start_date) & (df["trade_date"] <= end_date)]
 
-                keep_cols = ["trade_date", "open", "close", "high", "low", "volume", "amount", "pct_chg"]
+                keep_cols = ["trade_date","open","close","high","low","volume","amount","pct_chg"]
                 df = df[keep_cols]
 
-                if df is not None and not df.empty:
+                if not df.empty:
                     os.makedirs(cache_dir, exist_ok=True)
                     df.to_csv(cache_file, index=False)
                     return df.reset_index(drop=True)
@@ -874,6 +887,7 @@ def get_index_history_multi(ts_code: str, start_date: str, end_date: str):
             except Exception as e:
                 if attempt == 1:
                     print("source3 failed:", e)
+                _time.sleep(1)
                 time.sleep(1)
 
     # cache
