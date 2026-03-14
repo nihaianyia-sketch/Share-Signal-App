@@ -250,6 +250,59 @@ function IndicatorCard({
   );
 }
 
+
+function FlowBar({
+  title,
+  value,
+}: {
+  title: string;
+  value: number | null | undefined;
+}) {
+  const num = typeof value === "number" ? value : null;
+  const abs = num === null ? 0 : Math.abs(num);
+
+  const scaleBase = 300000000;
+  const widthPct = Math.min(100, (abs / scaleBase) * 100);
+
+  const isPositive = (num ?? 0) > 0;
+  const isNegative = (num ?? 0) < 0;
+
+  const fmt = (x: number | null | undefined) => {
+    if (x === null || x === undefined) return "-";
+    const ax = Math.abs(x);
+    if (ax >= 100000000) return `${(x / 100000000).toFixed(2)}亿`;
+    if (ax >= 10000) return `${(x / 10000).toFixed(2)}万`;
+    return `${x.toFixed(0)}`;
+  };
+
+  return (
+    <div className="mb-3">
+      <div className="flex items-center justify-between text-sm mb-1">
+        <span className="font-semibold text-gray-700">{title}</span>
+        <span className="text-black">{fmt(num)}</span>
+      </div>
+
+      <div className="relative h-8 border border-gray-300 rounded bg-white overflow-hidden">
+        <div className="absolute left-1/2 top-0 bottom-0 w-px bg-gray-400" />
+
+        {isPositive && (
+          <div
+            className="absolute left-1/2 top-0 bottom-0 bg-red-500"
+            style={{ width: `${widthPct / 2}%` }}
+          />
+        )}
+
+        {isNegative && (
+          <div
+            className="absolute right-1/2 top-0 bottom-0 bg-green-500"
+            style={{ width: `${widthPct / 2}%` }}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ScoreBar({
   title,
   score,
@@ -681,7 +734,7 @@ export default function HomePage() {
                 <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
                   <h2 className="text-xl font-semibold mb-3">资金信号</h2>
                   <p className="text-xs text-gray-600 mb-3">
-                    定义：反映主力、大单与中小单资金流向。单日资金说明当天买卖强弱，3日/5日累计用于判断资金趋势是否持续。
+                    定义：反映主力、大单与中小单资金流向。红色表示净流入，绿色表示净流出，中线为 0 轴；单日资金说明当天买卖强弱，3日/5日累计用于判断资金趋势是否持续。
                   </p>
 
                   <div className={`inline-block px-3 py-1 rounded-full border text-sm font-semibold mb-3 ${signalStyle(
@@ -690,18 +743,27 @@ export default function HomePage() {
                     {capitalFlow.trend_label || '未知'}
                   </div>
 
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-                    <IndicatorCard title="主力资金" value={capitalFlow.main_inflow} note="当日主力净流入/流出" />
-                    <IndicatorCard title="3日累计" value={capitalFlow.main_inflow_3d} note="最近3日主力资金累计" />
-                    <IndicatorCard title="5日累计" value={capitalFlow.main_inflow_5d} note="最近5日主力资金累计" />
-                    <IndicatorCard title="资金趋势" value={capitalFlow.trend_label} note="单日与5日资金综合判断" />
+                  <div className="grid grid-cols-2 md:grid-cols-2 gap-3 mb-4">
+                    <IndicatorCard
+                      title="资金趋势"
+                      value={capitalFlow.trend_label}
+                      note="结合单日与5日主力资金判断"
+                    />
+                    <IndicatorCard
+                      title="图形说明"
+                      value="红流入 / 绿流出"
+                      note="中线为0轴，便于对比资金方向与强弱"
+                    />
                   </div>
 
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                    <IndicatorCard title="超大单" value={capitalFlow.super_inflow} />
-                    <IndicatorCard title="大单" value={capitalFlow.big_inflow} />
-                    <IndicatorCard title="中单" value={capitalFlow.medium_inflow} />
-                    <IndicatorCard title="小单" value={capitalFlow.small_inflow} />
+                  <div className="mt-4">
+                    <FlowBar title="主力资金" value={capitalFlow.main_inflow} />
+                    <FlowBar title="3日累计" value={capitalFlow.main_inflow_3d} />
+                    <FlowBar title="5日累计" value={capitalFlow.main_inflow_5d} />
+                    <FlowBar title="超大单" value={capitalFlow.super_inflow} />
+                    <FlowBar title="大单" value={capitalFlow.big_inflow} />
+                    <FlowBar title="中单" value={capitalFlow.medium_inflow} />
+                    <FlowBar title="小单" value={capitalFlow.small_inflow} />
                   </div>
                 </section>
               )}
