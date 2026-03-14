@@ -529,6 +529,29 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
             benchmark_info["name"]
         )
 
+        if (
+            (not relative_strength.get("available"))
+            and benchmark.get("pct_chg") is not None
+            and hist_df is not None
+            and len(hist_df) >= 2
+        ):
+            try:
+                stock_pct = float(hist_df["pct_chg"].iloc[-1])
+                bench_pct = float(benchmark["pct_chg"])
+                rs_day = round(stock_pct - bench_pct, 2)
+                relative_strength = {
+                    "available": True,
+                    "benchmark_name": benchmark_info["name"],
+                    "rs_day": rs_day,
+                    "rs_5": None,
+                    "rs_10": None,
+                    "rs_20": None,
+                    "score": int(round(rs_day / 2)),
+                    "error": "部分周期数据不足"
+                }
+            except Exception:
+                pass
+
         market_sentiment = get_market_sentiment()
         capital_flow = get_capital_flow(symbol)
         sector_strength = get_sector_strength(symbol)
@@ -553,7 +576,7 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
             
             "sector_strength": sector_strength,
             "market_sentiment": market_sentiment,
-            "capital_flow": get_capital_flow(symbol),
+            "capital_flow": capital_flow,
 
             "status_judgement": status_judgement,
             "trading_decision": trading_decision,
@@ -867,6 +890,7 @@ def get_index_history_multi(ts_code: str, start_date: str, end_date: str):
     return None
 
 
+
 def calc_relative_strength(stock_df, bench_df, benchmark_name):
     try:
         import pandas as pd
@@ -884,10 +908,10 @@ def calc_relative_strength(stock_df, bench_df, benchmark_name):
             }
 
         df = pd.merge(
-            stock_df[["trade_date","close"]],
-            bench_df[["trade_date","close"]],
+            stock_df[["trade_date", "close"]],
+            bench_df[["trade_date", "close"]],
             on="trade_date",
-            suffixes=("_stock","_bench")
+            suffixes=("_stock", "_bench")
         ).sort_values("trade_date")
 
         if len(df) < 2:
@@ -909,13 +933,13 @@ def calc_relative_strength(stock_df, bench_df, benchmark_name):
         rs_day = df["rs"].iloc[-1]
 
         def window_rs(n):
-            if len(df) >= n+1:
-                s = df["close_stock"].iloc[-1] / df["close_stock"].iloc[-(n+1)] - 1
-                b = df["close_bench"].iloc[-1] / df["close_bench"].iloc[-(n+1)] - 1
+            if len(df) >= n + 1:
+                s = df["close_stock"].iloc[-1] / df["close_stock"].iloc[-(n + 1)] - 1
+                b = df["close_bench"].iloc[-1] / df["close_bench"].iloc[-(n + 1)] - 1
                 return (s - b) * 100
             return None
 
-        rs_5  = window_rs(5)
+        rs_5 = window_rs(5)
         rs_10 = window_rs(10)
         rs_20 = window_rs(20)
 
@@ -930,9 +954,9 @@ def calc_relative_strength(stock_df, bench_df, benchmark_name):
             values.append(rs_20); weights.append(0.2)
 
         if values:
-            score_raw = sum(v*w for v,w in zip(values,weights)) / sum(weights)
+            score_raw = sum(v * w for v, w in zip(values, weights)) / sum(weights)
         else:
-            score_raw = rs_day
+            score_raw = rs_day if rs_day is not None else 0
 
         score = int(round(score_raw / 2)) if score_raw is not None else 0
 
@@ -943,10 +967,10 @@ def calc_relative_strength(stock_df, bench_df, benchmark_name):
         return {
             "available": True,
             "benchmark_name": benchmark_name,
-            "rs_day": round(rs_day,2) if rs_day is not None else None,
-            "rs_5": round(rs_5,2) if rs_5 is not None else None,
-            "rs_10": round(rs_10,2) if rs_10 is not None else None,
-            "rs_20": round(rs_20,2) if rs_20 is not None else None,
+            "rs_day": round(float(rs_day), 2) if rs_day is not None else None,
+            "rs_5": round(float(rs_5), 2) if rs_5 is not None else None,
+            "rs_10": round(float(rs_10), 2) if rs_10 is not None else None,
+            "rs_20": round(float(rs_20), 2) if rs_20 is not None else None,
             "score": score,
             "error": error
         }
@@ -960,108 +984,8 @@ def calc_relative_strength(stock_df, bench_df, benchmark_name):
             "rs_10": None,
             "rs_20": None,
             "score": 0,
-            "error": str(e)
-        }
-
-        s = stock_df.copy()[["trade_date", "close", "pct_chg"]]
-        b = bench_df.copy()[["trade_date", "close", "pct_chg"]]
-
-        s["close"] = pd.to_numeric(s["close"], errors="coerce")
-        b["close"] = pd.to_numeric(b["close"], errors="coerce")
-        s["pct_chg"] = pd.to_numeric(s["pct_chg"], errors="coerce")
-        b["pct_chg"] = pd.to_numeric(b["pct_chg"], errors="coerce")
-
-        merged = pd.merge(s, b, on="trade_date", suffixes=("_stock", "_bench"))
-        merged = merged.sort_values("trade_date").reset_index(drop=True)
-
-        if len(merged) < 21:
-            return {
-                "available": False,
-                "benchmark_name": benchmark_name,
-                "rs_day": None,
-                "rs_5": None,
-                "rs_10": None,
-                "rs_20": None,
-                "score": 0,
-                "error": "对应大盘历史数据不足"
-            }
-
-        last = merged.iloc[-1]
-
-        def period_return(series, n):
-            if len(series) < n + 1:
-                return None
-            start = series.iloc[-(n + 1)]
-            end = series.iloc[-1]
-            if pd.isna(start) or pd.isna(end) or start == 0:
-                return None
-            return (end / start - 1) * 100
-
-        stock_close = merged["close_stock"]
-        bench_close = merged["close_bench"]
-
-        rs_day = None
-        if pd.notna(last["pct_chg_stock"]) and pd.notna(last["pct_chg_bench"]):
-            rs_day = float(last["pct_chg_stock"]) - float(last["pct_chg_bench"])
-
-        stock_5 = period_return(stock_close, 5)
-        bench_5 = period_return(bench_close, 5)
-        rs_5 = (stock_5 - bench_5) if stock_5 is not None and bench_5 is not None else None
-
-        stock_10 = period_return(stock_close, 10)
-        bench_10 = period_return(bench_close, 10)
-        rs_10 = (stock_10 - bench_10) if stock_10 is not None and bench_10 is not None else None
-
-        stock_20 = period_return(stock_close, 20)
-        bench_20 = period_return(bench_close, 20)
-        rs_20 = (stock_20 - bench_20) if stock_20 is not None and bench_20 is not None else None
-
-        weighted = 0.0
-        if rs_5 is not None:
-            weighted += 0.5 * rs_5
-        if rs_10 is not None:
-            weighted += 0.3 * rs_10
-        if rs_20 is not None:
-            weighted += 0.2 * rs_20
-
-        if weighted >= 5:
-            score = 8
-        elif weighted >= 2:
-            score = 5
-        elif weighted > 0:
-            score = 2
-        elif weighted <= -5:
-            score = -8
-        elif weighted <= -2:
-            score = -5
-        elif weighted < 0:
-            score = -2
-        else:
-            score = 0
-
-        return {
-            "available": True,
-            "benchmark_name": benchmark_name,
-            "rs_day": round_or_none(rs_day),
-            "rs_5": round_or_none(rs_5),
-            "rs_10": round_or_none(rs_10),
-            "rs_20": round_or_none(rs_20),
-            "score": score,
-            "error": None
-        }
-    except Exception as e:
-        return {
-            "available": False,
-            "benchmark_name": benchmark_name,
-            "rs_day": None,
-            "rs_5": None,
-            "rs_10": None,
-            "rs_20": None,
-            "score": 0,
             "error": safe_text(e)
         }
-
-
 
 def get_market_sentiment():
     try:
@@ -1538,6 +1462,7 @@ def calc_trading_decision(signal: dict, relative_strength: dict, market_sentimen
 
 
 
+
 def get_capital_flow(symbol: str):
     try:
         import akshare as ak
@@ -1628,11 +1553,13 @@ def get_capital_flow(symbol: str):
         }
 
     except Exception as e:
+        msg = safe_text(e)
+        if "NoneType" in msg:
+            msg = "资金流接口当前无数据"
         return {
             "available": False,
-            "error": safe_text(e)
+            "error": msg
         }
-
 
 def _safe_to_float(v):
     try:
