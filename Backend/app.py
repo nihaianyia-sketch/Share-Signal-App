@@ -800,7 +800,19 @@ def get_market_sentiment():
         breadth_score = breadth["score"]
         limit_score = limits["score"]
 
-        total_score = round(index_move * 0.4 + breadth_score * 0.3 + limit_score * 0.3)
+        weighted_parts = []
+        if index_parts is not None:
+            weighted_parts.append((index_move, 0.4))
+        if breadth.get("up") is not None and breadth.get("down") is not None:
+            weighted_parts.append((breadth_score, 0.3))
+        if limits.get("limit_up") is not None and limits.get("limit_down") is not None:
+            weighted_parts.append((limit_score, 0.3))
+
+        if weighted_parts:
+            total_weight = sum(w for _, w in weighted_parts)
+            total_score = round(sum(v * w for v, w in weighted_parts) / total_weight)
+        else:
+            total_score = 0
 
         return {
             "available": True,
