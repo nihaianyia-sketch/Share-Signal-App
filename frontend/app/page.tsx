@@ -349,7 +349,7 @@ function componentTitle(key: keyof ComponentScores): string {
     breakout_20d: '20日突破',
     daily_strength: '当日强弱',
     kdj: 'KDJ',
-    relative_strength: '相对强弱评分',
+    relative_strength: '相对强弱综合评分',
   };
   return map[key];
 }
@@ -949,8 +949,12 @@ export default function HomePage() {
               {componentScores && (
                 <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
                   <h2 className="text-xl font-semibold mb-4">单项技术评分</h2>
+                  <ScoreBar
+                    title="相对强弱综合评分"
+                    score={componentScores.relative_strength ?? 0}
+                  />
                   {(
-                    Object.entries(componentScores) as [keyof ComponentScores, number][]
+                    Object.entries(componentScores).filter(([key]) => key !== "relative_strength") as [keyof ComponentScores, number][]
                   ).map(([key, value]) => (
                     <ScoreBar key={key} title={componentTitle(key)} score={value ?? 0} />
                   ))}
