@@ -524,42 +524,7 @@ export default function HomePage() {
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
 
                     <IndicatorCard
-                      title="
-              {capitalFlow && capitalFlow.available && (
-                <section className="border border-gray-400 rounded p-4 mb-6 bg-white text-black">
-                  <h2 className="text-xl font-semibold mb-3">资金信号</h2>
-
-                  <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-
-                    <IndicatorCard
-                      title="主力资金"
-                      value={capitalFlow.main_inflow}
-                    />
-
-                    <IndicatorCard
-                      title="超大单"
-                      value={capitalFlow.super_inflow}
-                    />
-
-                    <IndicatorCard
-                      title="大单"
-                      value={capitalFlow.big_inflow}
-                    />
-
-                    <IndicatorCard
-                      title="中单"
-                      value={capitalFlow.medium_inflow}
-                    />
-
-                    <IndicatorCard
-                      title="小单"
-                      value={capitalFlow.small_inflow}
-                    />
-
-                  </div>
-                </section>
-              )}
-交易决策"
+                      title="交易决策"
                       value={tradingDecision.action}
                     />
 
