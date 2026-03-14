@@ -1053,7 +1053,8 @@ def get_market_sentiment():
                 "limit_up": limits.get("limit_up"),
                 "limit_down": limits.get("limit_down"),
                 "breadth_error": breadth.get("error"),
-                "limit_error": limits.get("error")
+                "limit_error": limits.get("error"),
+                "breadth_from_cache": breadth.get("from_cache")
             },
             "error": None
         }
@@ -1078,36 +1079,58 @@ def calc_sentiment_label(score: int):
 
 
 def get_market_breadth():
+    cache_dir = os.path.join(os.path.dirname(__file__), "cache")
+    cache_file = os.path.join(cache_dir, "market_breadth.json")
+
     try:
         df = ak.stock_zh_a_spot_em()
         if df is None or df.empty or "涨跌幅" not in df.columns:
-            return {"score": 0, "up": None, "down": None, "error": "breadth source empty"}
+            raise Exception("breadth source empty")
 
         pct = pd.to_numeric(df["涨跌幅"], errors="coerce")
-
         up = int((pct > 0).sum())
         down = int((pct < 0).sum())
 
         total = up + down
-        if total == 0:
-            return {"score": 0, "up": up, "down": down, "error": None}
+        score = clamp_score(round(((up - down) / total) * 10)) if total > 0 else 0
 
-        ratio = (up - down) / total
-        score = clamp_score(round(ratio * 10))
+        os.makedirs(cache_dir, exist_ok=True)
+        pd.DataFrame([{
+            "up": up,
+            "down": down,
+            "score": score,
+        }]).to_json(cache_file, orient="records", force_ascii=False)
 
         return {
             "score": score,
             "up": up,
             "down": down,
-            "error": None
+            "error": None,
+            "from_cache": False,
         }
 
     except Exception as e:
+        if os.path.exists(cache_file):
+            try:
+                cached = pd.read_json(cache_file)
+                if cached is not None and not cached.empty:
+                    row = cached.iloc[-1]
+                    return {
+                        "score": int(row.get("score", 0)),
+                        "up": int(row.get("up")) if pd.notna(row.get("up")) else None,
+                        "down": int(row.get("down")) if pd.notna(row.get("down")) else None,
+                        "error": f"实时涨跌家数获取失败，当前使用缓存：{safe_text(e)}",
+                        "from_cache": True,
+                    }
+            except Exception:
+                pass
+
         return {
             "score": 0,
             "up": None,
             "down": None,
-            "error": safe_text(e)
+            "error": safe_text(e),
+            "from_cache": False,
         }
 
 
