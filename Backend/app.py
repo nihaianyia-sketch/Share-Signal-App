@@ -1246,11 +1246,11 @@ def get_capital_flow(symbol: str):
 
         result = {
             "available": True,
-            "main_inflow": to_num(row.get("主力净流入")),
-            "super_inflow": to_num(row.get("超大单净流入")),
-            "big_inflow": to_num(row.get("大单净流入")),
-            "medium_inflow": to_num(row.get("中单净流入")),
-            "small_inflow": to_num(row.get("小单净流入")),
+            "main_inflow": to_num(row.get("主力净流入-净额")),
+            "super_inflow": to_num(row.get("超大单净流入-净额")),
+            "big_inflow": to_num(row.get("大单净流入-净额")),
+            "medium_inflow": to_num(row.get("中单净流入-净额")),
+            "small_inflow": to_num(row.get("小单净流入-净额")),
             "raw_date": row.get("日期") or row.get("trade_date"),
             "columns": list(df.columns),
         }
