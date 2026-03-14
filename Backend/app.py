@@ -798,6 +798,7 @@ def get_market_sentiment():
         ]
 
         idx_pct_list = []
+        index_parts = []
 
         for idx in index_targets:
             row = pick_index_row(idx_df, idx["ts_code"])
