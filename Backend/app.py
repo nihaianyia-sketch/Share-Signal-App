@@ -1092,20 +1092,23 @@ def calc_trading_decision(signal: dict, relative_strength: dict, market_sentimen
         ma5 = indicators.get("ma5")
         ma10 = indicators.get("ma10")
         ma20 = indicators.get("ma20")
+        atr_ratio = indicators.get("atr_ratio")
 
         reasons = []
         action = "观望等待"
         bias = "中性"
         confidence = 50
-        summary = "当前信号偏混合，等待更明确方向。"
+        horizon = "短线观察"
+        execution_hint = "等待更明确的趋势或动量确认。"
+        summary = "信号分化，暂不适合激进参与。"
 
-        # 先做一个综合分
         composite = 0.5 * signal_score + 0.3 * rs_score + 0.2 * market_score
 
-        if ma5 is not None and ma10 is not None and ma20 is not None and ma5 > ma10 > ma20:
-            reasons.append("均线多头排列")
-        elif ma5 is not None and ma10 is not None and ma20 is not None and ma5 < ma10 < ma20:
-            reasons.append("均线空头排列")
+        if ma5 is not None and ma10 is not None and ma20 is not None:
+            if ma5 > ma10 > ma20:
+                reasons.append("均线多头排列")
+            elif ma5 < ma10 < ma20:
+                reasons.append("均线空头排列")
 
         if macd is not None and macd_signal is not None:
             if macd > macd_signal:
@@ -1126,51 +1129,74 @@ def calc_trading_decision(signal: dict, relative_strength: dict, market_sentimen
         if status_label:
             reasons.append(f"状态判断：{status_label}")
 
-        if composite >= 5 and rs_score >= 2 and market_score >= 0:
-            action = "趋势跟随做多"
+        # 1) 强趋势多头
+        if composite >= 5 and rs_score >= 2 and market_score >= 0 and status_label in ["强势上升", "趋势修复"]:
+            action = "趋势做多"
             bias = "偏多"
-            confidence = 75
-            summary = "趋势、相对强弱和市场环境基本一致，适合顺势关注做多机会。"
+            confidence = 78
+            horizon = "波段"
+            execution_hint = "优先等回踩短均线或放量突破时参与，不建议无条件追高。"
+            summary = "趋势、相对强弱和市场环境较一致，适合顺势寻找做多机会。"
 
-        elif composite >= 2 and status_label in ["趋势修复", "超卖反弹观察"]:
+        # 2) 修复型机会
+        elif composite >= 2 and status_label == "趋势修复":
             action = "轻仓试多"
             bias = "谨慎偏多"
-            confidence = 62
-            summary = "存在修复或反弹迹象，但趋势强度仍需进一步确认。"
+            confidence = 66
+            horizon = "短线到波段"
+            execution_hint = "控制仓位，优先等待确认站稳 MA5/MA10。"
+            summary = "存在修复迹象，但中期趋势尚未完全扭转。"
 
+        # 3) 超卖反弹
+        elif status_label == "超卖反弹观察" or (rsi14 is not None and rsi14 < 25):
+            action = "反弹博弈"
+            bias = "短线博弈"
+            confidence = 61
+            horizon = "短线"
+            execution_hint = "更适合短线快进快出，不适合直接当成中线反转。"
+            summary = "处于超卖后的修复观察阶段，可关注短线反弹而非趋势反转。"
+
+        # 4) 偏弱但开始修复
+        elif composite > -2 and (status_label in ["趋势修复", "震荡整理"] or (ma5 is not None and close is not None and close >= ma5)):
+            action = "观察名单"
+            bias = "中性偏谨慎"
+            confidence = 58
+            horizon = "短线观察"
+            execution_hint = "先放入观察名单，等放量、站稳均线或相对强弱继续改善。"
+            summary = "部分信号改善，但仍缺少足够强的趋势确认。"
+
+        # 5) 明显弱势
         elif composite <= -5 and rs_score <= -2:
             action = "弱势回避"
             bias = "偏空"
-            confidence = 78
-            summary = "个股偏弱且相对大盘不占优，回避为主。"
+            confidence = 80
+            horizon = "防守"
+            execution_hint = "不宜逆势抄底，优先等待弱势结构改善。"
+            summary = "个股偏弱且相对大盘不占优，当前应以回避为主。"
 
+        # 6) 普通谨慎状态
         elif composite <= -2:
-            action = "谨慎观望"
+            action = "观望等待"
             bias = "中性偏谨慎"
             confidence = 64
+            horizon = "短线观察"
+            execution_hint = "等待趋势改善、相对强弱转正或市场环境回暖后再看。"
             summary = "整体信号略偏弱，不适合激进参与。"
 
-        else:
-            action = "观望等待"
-            bias = "中性"
-            confidence = 58
-            summary = "信号分化，等待更明确的趋势或动量确认。"
-
-        # 补充一个极端超卖反弹提示
-        if rsi14 is not None and rsi14 < 25 and status_label == "超卖反弹观察":
-            action = "反弹观察"
-            bias = "短线博弈"
-            confidence = max(confidence, 60)
-            summary = "处于超卖后的修复观察阶段，更适合短线而非中线追涨。"
-
-        # 如果价格仍在中期均线下方，则压低一点置信度
+        # 根据中期均线位置微调
         if close is not None and ma20 is not None and close < ma20:
-            confidence = max(35, confidence - 8)
+            confidence = max(35, confidence - 6)
+
+        # 高波动提醒
+        if atr_ratio is not None and atr_ratio > 0.04:
+            execution_hint += " 当前波动较大，需降低仓位、放宽止损。"
 
         return {
             "action": action,
             "bias": bias,
             "confidence": int(confidence),
+            "horizon": horizon,
+            "execution_hint": execution_hint,
             "summary": summary,
             "reasons": reasons[:6],
             "composite_score": round(composite, 2),
@@ -1181,6 +1207,8 @@ def calc_trading_decision(signal: dict, relative_strength: dict, market_sentimen
             "action": "未知",
             "bias": "未知",
             "confidence": 0,
+            "horizon": "未知",
+            "execution_hint": "交易决策生成失败",
             "summary": "交易决策生成失败",
             "reasons": [safe_text(e)],
             "composite_score": 0,
