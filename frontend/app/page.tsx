@@ -421,36 +421,73 @@ export default function HomePage() {
 
 
   useEffect(() => {
-    fetch(`${API_BASE_URL}/watchlists`)
-      .then((res) => res.json())
-      .then((res: WatchlistsResponse) => {
-        setWatchlists(res.watchlists || []);
-        if ((res.watchlists || []).includes("core")) {
+    let cancelled = false;
+
+    async function loadWatchlists() {
+      try {
+        const res = await fetch(`${API_BASE_URL}/watchlists`, { cache: "no-store" });
+        const json: WatchlistsResponse = await res.json();
+
+        if (cancelled) return;
+
+        const items = json.watchlists || [];
+        setWatchlists(items);
+
+        if (items.includes("core")) {
           setSelectedWatchlist("core");
-        } else if ((res.watchlists || []).length > 0) {
-          setSelectedWatchlist(res.watchlists![0]);
+        } else if (items.length > 0) {
+          setSelectedWatchlist(items[0]);
         }
-      })
-      .catch(() => {
-        setWatchlists([]);
-      });
+      } catch {
+        if (!cancelled) {
+          setWatchlists([]);
+          setSelectedWatchlist("core");
+        }
+      }
+    }
+
+    loadWatchlists();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
-    if (!selectedWatchlist) return;
+    if (!selectedWatchlist) {
+      setLeaders([]);
+      setLeadersLoading(false);
+      return;
+    }
 
-    setLeadersLoading(true);
-    fetch(`${API_BASE_URL}/leaders?watchlist=${encodeURIComponent(selectedWatchlist)}`)
-      .then((res) => res.json())
-      .then((res: LeadersResponse) => {
-        setLeaders(res.leaders || []);
-      })
-      .catch(() => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 12000);
+
+    async function loadLeaders() {
+      setLeadersLoading(true);
+      try {
+        const res = await fetch(
+          `${API_BASE_URL}/leaders?watchlist=${encodeURIComponent(selectedWatchlist)}`,
+          {
+            cache: "no-store",
+            signal: controller.signal,
+          }
+        );
+        const json: LeadersResponse = await res.json();
+        setLeaders(json.leaders || []);
+      } catch {
         setLeaders([]);
-      })
-      .finally(() => {
+      } finally {
+        clearTimeout(timer);
         setLeadersLoading(false);
-      });
+      }
+    }
+
+    loadLeaders();
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
   }, [selectedWatchlist]);
 
   useEffect(() => {
@@ -1132,7 +1169,12 @@ export default function HomePage() {
                     score={componentScores.relative_strength ?? 0}
                   />
                   {(
-                    Object.entries(componentScores).filter(([key]) => key !== "relative_strength") as [keyof ComponentScores, number][]
+                    Object.entries(componentScores)
+                      .filter(([key]) => key !== "relative_strength")
+                      .filter(([key]) => {
+                        const title = componentTitle(key as keyof ComponentScores);
+                        return Boolean(title && String(title).trim());
+                      }) as [keyof ComponentScores, number][]
                   ).map(([key, value]) => (
                     <ScoreBar key={key} title={componentTitle(key)} score={value ?? 0} />
                   ))}
