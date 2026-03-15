@@ -28,6 +28,55 @@ INDEX_HISTORY_MEM_CACHE_TS = {}
 INDEX_HISTORY_CACHE_LOCK = threading.Lock()
 INDEX_HISTORY_TTL_SECONDS = 6 * 60 * 60  # 6 hours
 
+
+STOCK_NAME_CACHE = None
+
+
+def get_stock_name_map():
+    global STOCK_NAME_CACHE
+
+    if STOCK_NAME_CACHE is not None and len(STOCK_NAME_CACHE) > 0:
+        return STOCK_NAME_CACHE
+
+    if not TOKEN:
+        return {}
+
+    try:
+        pro_local = ts.pro_api(TOKEN)
+        basic_df = pro_local.stock_basic(
+            exchange="",
+            list_status="L",
+            fields="ts_code,symbol,name"
+        )
+        if basic_df is None or basic_df.empty:
+            return {}
+        STOCK_NAME_CACHE = dict(zip(basic_df["ts_code"], basic_df["name"]))
+    except Exception:
+        return {}
+
+    return STOCK_NAME_CACHE
+
+    if not TOKEN:
+        STOCK_NAME_CACHE = {}
+        return STOCK_NAME_CACHE
+
+    try:
+        pro_local = ts.pro_api(TOKEN)
+        basic_df = pro_local.stock_basic(
+            exchange="",
+            list_status="L",
+            fields="ts_code,name"
+        )
+        if basic_df is None or basic_df.empty:
+            STOCK_NAME_CACHE = {}
+        else:
+            STOCK_NAME_CACHE = dict(zip(basic_df["ts_code"], basic_df["name"]))
+    except Exception:
+        STOCK_NAME_CACHE = {}
+
+    return STOCK_NAME_CACHE
+
+
 WATCHLISTS = {
     "core": ["600519", "300870", "002851"],
     "ai_power": ["300870", "002851", "300750", "002594"],
@@ -1940,6 +1989,7 @@ def get_leaders(
             }
 
         pro_local = ts.pro_api(TOKEN)
+        name_map = get_stock_name_map()
         results = []
 
         for raw_symbol in codes:
@@ -1956,19 +2006,15 @@ def get_leaders(
                     ts_code = pure_code + ".SZ"
                     benchmark_info = {"name": "深证成指", "ts_code": "399001.SZ"}
 
-                stock_name = None
-                try:
-                    basic_df = pro_local.stock_basic(
-                        exchange="",
-                        list_status="L",
-                        fields="ts_code,symbol,name"
-                    )
-                    if basic_df is not None and not basic_df.empty:
-                        match = basic_df[basic_df["ts_code"] == ts_code]
-                        if not match.empty:
-                            stock_name = match.iloc[0]["name"]
-                except Exception:
-                    pass
+                stock_name = name_map.get(ts_code)
+
+                if not stock_name:
+                    try:
+                        hist_resp = get_history(pure_code)
+                        if isinstance(hist_resp, dict):
+                            stock_name = hist_resp.get("name")
+                    except Exception:
+                        pass
 
                 hist_df = pro_local.daily(
                     ts_code=ts_code,
