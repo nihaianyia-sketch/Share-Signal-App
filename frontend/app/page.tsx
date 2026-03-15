@@ -729,11 +729,12 @@ export default function HomePage() {
                   </div>
 
                   <select
-                    className="border border-gray-300 rounded px-2 py-1 text-sm bg-white w-auto max-w-[140px] shrink-0 max-w-[120px]"
+                    className="border border-gray-300 rounded px-2 py-1 text-sm bg-white shrink-0"
                     value={selectedWatchlist}
                     onChange={(e) => setSelectedWatchlist(e.target.value)}
+                    style={{ width: "68px", maxWidth: "68px" }}
                   >
-                    {watchlists.map((w) => (
+{watchlists.map((w) => (
                       <option key={w} value={w}>
                         {WATCHLIST_LABELS[w] || w}
                       </option>
