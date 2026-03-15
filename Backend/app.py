@@ -30,8 +30,37 @@ INDEX_HISTORY_MEM_CACHE_TS = {}
 INDEX_HISTORY_CACHE_LOCK = threading.Lock()
 INDEX_HISTORY_TTL_SECONDS = 6 * 60 * 60  # 6 hours
 
+MARKET_SENTIMENT_CACHE = None
+MARKET_SENTIMENT_CACHE_TS = 0
+MARKET_SENTIMENT_TTL_SECONDS = 120
+
+
 
 STOCK_NAME_CACHE = None
+
+
+
+def fallback_stock_name(symbol: str | None = None, ts_code: str | None = None):
+    name_map = {
+        "600519": "贵州茅台",
+        "300870": "欧陆通",
+        "002851": "麦格米特",
+        "601888": "中国中免",
+        "601127": "赛力斯",
+        "601567": "三星医疗",
+    }
+
+    if symbol:
+        pure = symbol.split(".")[0].upper()
+        if pure in name_map:
+            return name_map[pure]
+
+    if ts_code:
+        pure = ts_code.split(".")[0].upper()
+        if pure in name_map:
+            return name_map[pure]
+
+    return None
 
 
 def get_stock_name_map():
@@ -676,6 +705,7 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
             end_date
         )
 
+        t_rs = time.time()
         relative_strength = calc_relative_strength(
             hist_df,
             bench_hist_df,
@@ -705,9 +735,26 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
             except Exception:
                 pass
 
-        market_sentiment = get_market_sentiment()
-        capital_flow = get_capital_flow(symbol)
-        sector_strength = get_sector_strength(symbol)
+        print("timing relative_strength =", round(time.time() - t_rs, 3))
+
+        t_ms = time.time()
+        market_sentiment = safe_call(
+    lambda: get_market_sentiment_quick(),
+    {"available": False}
+)
+        print("timing market_sentiment =", round(time.time() - t_ms, 3))
+
+        t_cf = time.time()
+        capital_flow = safe_call(
+    lambda: get_capital_flow(symbol),
+    {"available": False}
+)
+        print("timing capital_flow =", round(time.time() - t_cf, 3))
+
+        t_ss = time.time()
+        sector_strength = {"available": False, "error": "已跳过以提升响应速度"}
+        print("timing sector_strength =", round(time.time() - t_ss, 3))
+
         status_judgement = calc_status_judgement(hist_df, signal, relative_strength)
         trading_decision = calc_trading_decision(
             signal,
@@ -719,7 +766,7 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
 
         return {
             "symbol": symbol,
-            "name": stock_name,
+            "name": stock_name or fallback_stock_name(symbol, ts_code),
             "ts_code": ts_code,
             "history": out_df.to_dict(orient="records"),
             "signal": signal,
@@ -1112,6 +1159,47 @@ def get_index_history_multi(ts_code: str, start_date: str, end_date: str):
                 _time.sleep(1)
 
     return None
+
+
+def safe_call(fn, default=None):
+    try:
+        return fn()
+    except Exception as e:
+        print("safe_call error:", e)
+        return default
+
+
+def get_market_sentiment_cached():
+    global MARKET_SENTIMENT_CACHE, MARKET_SENTIMENT_CACHE_TS
+
+    now = time.time()
+    if MARKET_SENTIMENT_CACHE is not None and now - MARKET_SENTIMENT_CACHE_TS <= MARKET_SENTIMENT_TTL_SECONDS:
+        return MARKET_SENTIMENT_CACHE
+
+    result = get_market_sentiment()
+    MARKET_SENTIMENT_CACHE = result
+    MARKET_SENTIMENT_CACHE_TS = now
+    return result
+
+
+
+
+def get_market_sentiment_quick():
+    global MARKET_SENTIMENT_CACHE, MARKET_SENTIMENT_CACHE_TS
+
+    now = time.time()
+    if MARKET_SENTIMENT_CACHE is not None and now - MARKET_SENTIMENT_CACHE_TS <= MARKET_SENTIMENT_TTL_SECONDS:
+        return MARKET_SENTIMENT_CACHE
+
+    return {
+        "available": False,
+        "score": 0,
+        "label": "中性",
+        "components": {},
+        "stats": {},
+        "error": "已跳过实时市场情绪以提升响应速度",
+    }
+
 
 def calc_relative_strength(stock_df, bench_df, benchmark_name):
     try:
