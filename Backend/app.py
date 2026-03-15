@@ -1879,45 +1879,135 @@ def get_sector_strength(symbol: str):
 
 
 
+
 @app.get("/leaders")
 def get_leaders(
     symbols: str = Query(
-        "600519,000858,300870,002851,300750,002594,601127,002475,300308,688256",
+        "",
         description="逗号分隔股票代码列表，如 600519,300750"
+    ),
+    watchlist: str = Query(
+        "",
+        description="预设观察池名称，如 core / ai_power / cpo"
     ),
     limit: int = Query(20, ge=1, le=100, description="返回前N名"),
 ):
     try:
         if not isinstance(symbols, str):
-            symbols = "600519,000858,300870,002851,300750,002594,601127,002475,300308,688256"
-
+            symbols = ""
+        if not isinstance(watchlist, str):
+            watchlist = ""
         if not isinstance(limit, int):
             limit = 20
 
-        codes = [x.strip() for x in symbols.split(",") if x.strip()]
-        if not codes:
-            return {"leaders": [], "count": 0, "universe_size": 0, "error": "股票列表为空"}
+        watchlist = watchlist.strip()
 
+        if watchlist:
+            codes = WATCHLISTS.get(watchlist, [])
+            if not codes:
+                return {
+                    "leaders": [],
+                    "count": 0,
+                    "universe_size": 0,
+                    "error": f"未知观察池: {watchlist}"
+                }
+        else:
+            if not symbols.strip():
+                codes = WATCHLISTS.get("core", [])
+            else:
+                codes = [x.strip() for x in symbols.split(",") if x.strip()]
+
+        if not codes:
+            return {
+                "leaders": [],
+                "count": 0,
+                "universe_size": 0,
+                "error": "股票列表为空"
+            }
+
+        if not TOKEN:
+            return {
+                "leaders": [],
+                "count": 0,
+                "universe_size": len(codes),
+                "error": "缺少 TUSHARE_TOKEN 环境变量"
+            }
+
+        pro_local = ts.pro_api(TOKEN)
         results = []
 
         for raw_symbol in codes:
             try:
-                resp = get_history(raw_symbol)
-
-                if not isinstance(resp, dict):
-                    continue
-                if resp.get("error"):
-                    continue
-
-                rs = resp.get("relative_strength", {})
-                if not rs or not rs.get("available"):
-                    continue
-
                 pure_code = raw_symbol.split(".")[0].upper()
+
+                if pure_code.startswith(("600","601","603","605","688")):
+                    ts_code = pure_code + ".SH"
+                    benchmark_info = {"name": "上证综指", "ts_code": "000001.SH"}
+                elif pure_code.startswith("300"):
+                    ts_code = pure_code + ".SZ"
+                    benchmark_info = {"name": "创业板指", "ts_code": "399006.SZ"}
+                else:
+                    ts_code = pure_code + ".SZ"
+                    benchmark_info = {"name": "深证成指", "ts_code": "399001.SZ"}
+
+                stock_name = None
+                try:
+                    basic_df = pro_local.stock_basic(
+                        exchange="",
+                        list_status="L",
+                        fields="ts_code,symbol,name"
+                    )
+                    if basic_df is not None and not basic_df.empty:
+                        match = basic_df[basic_df["ts_code"] == ts_code]
+                        if not match.empty:
+                            stock_name = match.iloc[0]["name"]
+                except Exception:
+                    pass
+
+                hist_df = pro_local.daily(
+                    ts_code=ts_code,
+                    start_date="20250101",
+                    end_date=datetime.now().strftime("%Y%m%d")
+                )
+
+                if hist_df is None or hist_df.empty:
+                    continue
+
+                hist_df = hist_df.copy()
+                hist_df["trade_date"] = hist_df["trade_date"].astype(str)
+                hist_df = hist_df.sort_values("trade_date").reset_index(drop=True)
+
+                for col in ["open", "high", "low", "close", "pct_chg", "vol", "amount"]:
+                    if col in hist_df.columns:
+                        hist_df[col] = pd.to_numeric(hist_df[col], errors="coerce")
+
+                if "vol" in hist_df.columns and "volume" not in hist_df.columns:
+                    hist_df["volume"] = hist_df["vol"]
+
+                if len(hist_df) < 21:
+                    continue
+
+                start_date = str(hist_df["trade_date"].iloc[-30])
+                end_date = str(hist_df["trade_date"].iloc[-1])
+
+                bench_df = get_index_history_multi(
+                    benchmark_info["ts_code"],
+                    start_date,
+                    end_date
+                )
+
+                if bench_df is None or len(bench_df) < 2:
+                    continue
+
+                rs = calc_relative_strength(hist_df, bench_df, benchmark_info["name"])
+
+                if not rs.get("available"):
+                    continue
+
                 results.append({
                     "symbol": pure_code,
-                    "ts_code": resp.get("ts_code"),
-                    "name": resp.get("name"),
+                    "ts_code": ts_code,
+                    "name": stock_name,
                     "benchmark_name": rs.get("benchmark_name"),
                     "rs_day": rs.get("rs_day"),
                     "rs_5": rs.get("rs_5"),
@@ -1930,13 +2020,27 @@ def get_leaders(
             except Exception:
                 continue
 
-        results = [x for x in results if x.get("rs_20") is not None]
-        results.sort(key=lambda x: x["rs_20"], reverse=True)
+        results = [
+            x for x in results
+            if x.get("rs_20") is not None or x.get("score") is not None or x.get("rs_day") is not None
+        ]
+
+        def rank_value(x):
+            if x.get("rs_20") is not None:
+                return x["rs_20"]
+            if x.get("score") is not None:
+                return x["score"]
+            if x.get("rs_day") is not None:
+                return x["rs_day"]
+            return -999
+
+        results.sort(key=rank_value, reverse=True)
 
         return {
             "leaders": results[:limit],
             "count": min(limit, len(results)),
             "universe_size": len(codes),
+            "watchlist": watchlist or None,
             "error": None
         }
 
@@ -1945,5 +2049,6 @@ def get_leaders(
             "leaders": [],
             "count": 0,
             "universe_size": 0,
+            "watchlist": watchlist if isinstance(watchlist, str) else None,
             "error": safe_text(e)
         }
