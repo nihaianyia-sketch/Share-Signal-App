@@ -341,37 +341,34 @@ function FlowBar({
   );
 }
 
-function ScoreBar({
-  title,
-  score,
-}: {
-  title: string;
-  score: number;
-}) {
-  const clamped = Math.max(-10, Math.min(10, score));
-  const leftPercent = ((clamped + 10) / 20) * 100;
-  const scoreColor =
-    clamped > 0 ? 'text-green-700' : clamped < 0 ? 'text-red-700' : 'text-gray-700';
+function ScoreBar({ title, score }: { title: string; score: number }) {
+  const pct = Math.min(100, Math.max(0, (score + 5) * 10));
+
+  let color = "bg-gray-400";
+  let label = "中";
+
+  if (score >= 2) {
+    color = "bg-green-500";
+    label = "强";
+  } else if (score < 0) {
+    color = "bg-red-500";
+    label = "弱";
+  }
 
   return (
-    <div className="mb-4">
-      <div className="flex justify-between items-center mb-1">
-        <span className="font-medium text-black">{title}</span>
-        <span className={`font-bold ${scoreColor}`}>{clamped}</span>
+    <div className="mb-2">
+      <div className="flex justify-between text-sm mb-1">
+        <span>{title}</span>
+        <span className="text-xs text-gray-600">
+          {score} · {label}
+        </span>
       </div>
-      <div className="relative h-6 rounded-full overflow-hidden border border-gray-300">
-        <div className="absolute inset-y-0 left-0 w-1/2 bg-red-200" />
-        <div className="absolute inset-y-0 right-0 w-1/2 bg-green-200" />
-        <div className="absolute inset-y-0 left-1/2 w-px bg-black" />
+
+      <div className="w-full bg-gray-200 h-2 rounded">
         <div
-          className="absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-black border border-white shadow"
-          style={{ left: `calc(${leftPercent}% - 8px)` }}
+          className={`h-2 rounded ${color}`}
+          style={{ width: `${pct}%` }}
         />
-      </div>
-      <div className="flex justify-between text-xs text-gray-700 mt-1">
-        <span>-10</span>
-        <span>0</span>
-        <span>+10</span>
       </div>
     </div>
   );
@@ -1175,9 +1172,11 @@ export default function HomePage() {
                         const title = componentTitle(key as keyof ComponentScores);
                         return Boolean(title && String(title).trim());
                       }) as [keyof ComponentScores, number][]
-                  ).map(([key, value]) => (
-                    <ScoreBar key={key} title={componentTitle(key)} score={value ?? 0} />
-                  ))}
+                  ).map(([key, value]) => {
+                    const title = componentTitle(key);
+                    if (!title || !String(title).trim()) return null;
+                    return <ScoreBar key={key} title={title} score={value ?? 0} />;
+                  })}
                 </section>
               )}
 
