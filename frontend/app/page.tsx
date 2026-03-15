@@ -729,7 +729,7 @@ export default function HomePage() {
                   </div>
 
                   <select
-                    className="border border-gray-300 rounded px-2 py-1 text-sm bg-white"
+                    className="border border-gray-300 rounded px-2 py-1 text-sm bg-white w-auto max-w-[140px] shrink-0 max-w-[120px]"
                     value={selectedWatchlist}
                     onChange={(e) => setSelectedWatchlist(e.target.value)}
                   >
