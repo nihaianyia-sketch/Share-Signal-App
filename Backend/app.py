@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 import tushare as ts
 import akshare as ak
+import threading
 
 app = FastAPI(title="A股买卖点助手 - Tushare版")
 
@@ -19,7 +20,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 TOKEN = os.getenv("TUSHARE_TOKEN", "").strip()
+
+INDEX_HISTORY_MEM_CACHE = {}
+INDEX_HISTORY_MEM_CACHE_TS = {}
+INDEX_HISTORY_CACHE_LOCK = threading.Lock()
+INDEX_HISTORY_TTL_SECONDS = 6 * 60 * 60  # 6 hours
 
 
 STOCK_NAME_FILE = os.path.join(os.path.dirname(__file__), "stock_names.json")
@@ -713,7 +720,60 @@ CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
 
 
 
+
+def _filter_index_df_by_date(df, start_date: str, end_date: str):
+    if df is None or getattr(df, "empty", True):
+        return None
+
+    df = df.copy()
+
+    if "trade_date" not in df.columns:
+        return None
+
+    df["trade_date"] = df["trade_date"].astype(str)
+    df = df[(df["trade_date"] >= start_date) & (df["trade_date"] <= end_date)]
+
+    if df.empty:
+        return None
+
+    return df.reset_index(drop=True)
+
+
+
 def get_index_history_multi(ts_code: str, start_date: str, end_date: str):
+
+    cache_key = ts_code
+
+    with INDEX_HISTORY_CACHE_LOCK:
+        cached_df = INDEX_HISTORY_MEM_CACHE.get(cache_key)
+        cached_ts = INDEX_HISTORY_MEM_CACHE_TS.get(cache_key)
+
+    if cached_df is not None and cached_ts is not None:
+        if time.time() - cached_ts <= INDEX_HISTORY_TTL_SECONDS:
+            df = _filter_index_df_by_date(cached_df, start_date, end_date)
+            if df is not None:
+                return df
+
+    cache_dir = os.path.join(os.path.dirname(__file__), "cache", "index")
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_file = os.path.join(cache_dir, f"{ts_code}.csv")
+
+    if os.path.exists(cache_file):
+        try:
+            df = pd.read_csv(cache_file)
+            filtered = _filter_index_df_by_date(df, start_date, end_date)
+
+            if filtered is not None:
+                with INDEX_HISTORY_CACHE_LOCK:
+                    INDEX_HISTORY_MEM_CACHE[cache_key] = df.copy()
+                    INDEX_HISTORY_MEM_CACHE_TS[cache_key] = time.time()
+
+                print("using cached index history", ts_code)
+                return filtered
+
+        except Exception:
+            pass
+
     symbol_map_hist = {
         "000001.SH": "000001",
         "399001.SZ": "399001",
@@ -735,109 +795,109 @@ def get_index_history_multi(ts_code: str, start_date: str, end_date: str):
         "000688.SH": "000688.SS",
     }
 
-    cache_dir = os.path.join(os.path.dirname(__file__), "cache")
-    cache_file = os.path.join(cache_dir, f"index_{ts_code.replace('.', '_')}.csv")
+    def _save_and_return(df_full):
+        os.makedirs(cache_dir, exist_ok=True)
+        df_full.to_csv(cache_file, index=False)
 
-    def normalize_df(df):
-        if df is None or df.empty:
-            return None
+        with INDEX_HISTORY_CACHE_LOCK:
+            INDEX_HISTORY_MEM_CACHE[cache_key] = df_full.copy()
+            INDEX_HISTORY_MEM_CACHE_TS[cache_key] = time.time()
 
-        df = df.copy()
+        return _filter_index_df_by_date(df_full, start_date, end_date)
 
-        rename_map = {
-            "日期": "date",
-            "开盘": "open",
-            "收盘": "close",
-            "最高": "high",
-            "最低": "low",
-            "成交量": "volume",
-            "成交额": "amount",
-        }
-        df = df.rename(columns=rename_map)
-
-        if "trade_date" not in df.columns:
-            if "date" in df.columns:
-                df["trade_date"] = pd.to_datetime(df["date"]).dt.strftime("%Y%m%d")
-            elif df.index.name is not None or isinstance(df.index, pd.DatetimeIndex):
-                df["trade_date"] = pd.to_datetime(df.index).strftime("%Y%m%d")
-            else:
-                return None
-
-        for col in ["open", "close", "high", "low", "volume", "amount"]:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-
-        df["trade_date"] = df["trade_date"].astype(str)
-        df = df.sort_values("trade_date").reset_index(drop=True)
-
-        if "pct_chg" not in df.columns:
-            df["pct_chg"] = df["close"].pct_change() * 100
-        else:
-            df["pct_chg"] = pd.to_numeric(df["pct_chg"], errors="coerce")
-
-        df = df[(df["trade_date"] >= start_date) & (df["trade_date"] <= end_date)]
-
-        if df.empty:
-            return None
-
-        keep_cols = [c for c in ["trade_date", "open", "close", "high", "low", "volume", "amount", "pct_chg"] if c in df.columns]
-        return df[keep_cols].reset_index(drop=True)
-
-    # source 1
+    # source 1: AKShare hist
     symbol1 = symbol_map_hist.get(ts_code)
     if symbol1 is not None:
         for attempt in range(2):
             try:
                 import akshare as ak
+
                 df = ak.index_zh_a_hist(symbol=symbol1, period="daily")
-                df = normalize_df(df)
-                if df is not None:
-                    os.makedirs(cache_dir, exist_ok=True)
-                    df.to_csv(cache_file, index=False)
-                    return df
+                if df is not None and not df.empty:
+                    df = df.rename(columns={
+                        "日期": "date",
+                        "开盘": "open",
+                        "收盘": "close",
+                        "最高": "high",
+                        "最低": "low",
+                        "成交量": "volume",
+                        "成交额": "amount",
+                        "涨跌幅": "pct_chg",
+                    }).copy()
+
+                    df["trade_date"] = pd.to_datetime(df["date"]).dt.strftime("%Y%m%d")
+
+                    for col in ["open", "close", "high", "low", "volume", "amount", "pct_chg"]:
+                        if col in df.columns:
+                            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+                    keep_cols = ["trade_date", "open", "close", "high", "low", "volume", "amount", "pct_chg"]
+                    df = df[keep_cols].sort_values("trade_date").reset_index(drop=True)
+
+                    filtered = _save_and_return(df)
+                    if filtered is not None:
+                        return filtered
+
             except Exception as e:
                 if attempt == 1:
                     print("source1 failed:", e)
                 time.sleep(1)
 
-    # source 2
+    # source 2: AKShare daily em
     symbol2 = symbol_map_daily.get(ts_code)
     if symbol2 is not None:
         for attempt in range(2):
             try:
                 import akshare as ak
+
                 df = ak.stock_zh_index_daily_em(symbol=symbol2)
-                df = normalize_df(df)
-                if df is not None:
-                    os.makedirs(cache_dir, exist_ok=True)
-                    df.to_csv(cache_file, index=False)
-                    return df
+                if df is not None and not df.empty:
+                    df = df.copy()
+
+                    if "date" not in df.columns:
+                        raise Exception("missing date column")
+
+                    df["trade_date"] = pd.to_datetime(df["date"]).dt.strftime("%Y%m%d")
+
+                    for col in ["open", "close", "high", "low", "volume", "amount"]:
+                        if col in df.columns:
+                            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+                    if "pct_chg" not in df.columns:
+                        df["pct_chg"] = pd.to_numeric(df["close"], errors="coerce").pct_change() * 100
+                    else:
+                        df["pct_chg"] = pd.to_numeric(df["pct_chg"], errors="coerce")
+
+                    keep_cols = [c for c in ["trade_date", "open", "close", "high", "low", "volume", "amount", "pct_chg"] if c in df.columns]
+                    df = df[keep_cols].sort_values("trade_date").reset_index(drop=True)
+
+                    filtered = _save_and_return(df)
+                    if filtered is not None:
+                        return filtered
+
             except Exception as e:
                 if attempt == 1:
                     print("source2 failed:", e)
                 time.sleep(1)
 
-    
-    # source 3: yahoo finance (direct CSV download, more stable than yfinance.download)
+    # source 3: Yahoo chart API
     symbol3 = symbol_map_yf.get(ts_code)
     if symbol3 is not None:
         for attempt in range(2):
             try:
                 import requests
-                import io
                 import time as _time
 
                 start_ts = int(pd.Timestamp(start_date).timestamp())
                 end_ts = int((pd.Timestamp(end_date) + pd.Timedelta(days=1)).timestamp())
 
-                url = f"https://query1.finance.yahoo.com/v7/finance/download/{symbol3}"
-
+                url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol3}"
                 params = {
                     "period1": start_ts,
                     "period2": end_ts,
                     "interval": "1d",
-                    "events": "history",
-                    "includeAdjustedClose": "true",
+                    "includePrePost": "false",
+                    "events": "div,splits",
                 }
 
                 r = requests.get(
@@ -846,64 +906,47 @@ def get_index_history_multi(ts_code: str, start_date: str, end_date: str):
                     timeout=15,
                     headers={"User-Agent": "Mozilla/5.0"},
                 )
-
                 r.raise_for_status()
 
-                df = pd.read_csv(io.StringIO(r.text))
+                data = r.json()
+                chart = data.get("chart", {})
+                result = chart.get("result")
 
-                if df is None or df.empty:
-                    raise Exception("empty yahoo dataframe")
+                if not result:
+                    raise Exception(f"empty yahoo chart result: {chart.get('error')}")
 
-                df = df.rename(columns={
-                    "Date": "date",
-                    "Open": "open",
-                    "Close": "close",
-                    "High": "high",
-                    "Low": "low",
-                    "Volume": "volume",
-                }).copy()
+                result = result[0]
+                timestamps = result.get("timestamp")
+                quote = result.get("indicators", {}).get("quote", [{}])[0]
+
+                if not timestamps or not quote:
+                    raise Exception("missing yahoo chart fields")
+
+                df = pd.DataFrame({
+                    "trade_date": pd.to_datetime(timestamps, unit="s").strftime("%Y%m%d"),
+                    "open": pd.to_numeric(quote.get("open"), errors="coerce"),
+                    "close": pd.to_numeric(quote.get("close"), errors="coerce"),
+                    "high": pd.to_numeric(quote.get("high"), errors="coerce"),
+                    "low": pd.to_numeric(quote.get("low"), errors="coerce"),
+                    "volume": pd.to_numeric(quote.get("volume"), errors="coerce"),
+                })
 
                 df["amount"] = pd.NA
-                df["trade_date"] = pd.to_datetime(df["date"]).dt.strftime("%Y%m%d")
-
-                for col in ["open", "close", "high", "low", "volume"]:
-                    if col in df.columns:
-                        df[col] = pd.to_numeric(df[col], errors="coerce")
-
-                df = df.sort_values("trade_date").reset_index(drop=True)
-
                 df["pct_chg"] = df["close"].pct_change() * 100
 
-                df = df[(df["trade_date"] >= start_date) & (df["trade_date"] <= end_date)]
+                keep_cols = ["trade_date", "open", "close", "high", "low", "volume", "amount", "pct_chg"]
+                df = df[keep_cols].sort_values("trade_date").reset_index(drop=True)
 
-                keep_cols = ["trade_date","open","close","high","low","volume","amount","pct_chg"]
-                df = df[keep_cols]
-
-                if not df.empty:
-                    os.makedirs(cache_dir, exist_ok=True)
-                    df.to_csv(cache_file, index=False)
-                    return df.reset_index(drop=True)
+                filtered = _save_and_return(df)
+                if filtered is not None:
+                    return filtered
 
             except Exception as e:
                 if attempt == 1:
                     print("source3 failed:", e)
                 _time.sleep(1)
-                time.sleep(1)
-
-    # cache
-    if os.path.exists(cache_file):
-        try:
-            df = pd.read_csv(cache_file)
-            df = normalize_df(df)
-            if df is not None:
-                print("using cached index history", ts_code)
-                return df
-        except Exception as e:
-            print("cache failed:", e)
 
     return None
-
-
 
 def calc_relative_strength(stock_df, bench_df, benchmark_name):
     try:
