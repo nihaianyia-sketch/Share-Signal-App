@@ -161,6 +161,20 @@ type LeaderItem = {
   error?: string | null;
 };
 
+type StockSearchItem = {
+  symbol: string;
+  ts_code?: string | null;
+  name?: string | null;
+  initials?: string | null;
+  pinyin_initials?: string | null;
+};
+
+type StockSearchResponse = {
+  results: StockSearchItem[];
+  count: number;
+  error?: string | null;
+};
+
 type LeadersResponse = {
   leaders: LeaderItem[];
   count: number;
@@ -406,6 +420,10 @@ export default function HomePage() {
   const [leadersLoading, setLeadersLoading] = useState(false);
 const [newWatchlistSymbol, setNewWatchlistSymbol] = useState("");
 const [watchlistActionMsg, setWatchlistActionMsg] = useState("");
+const [stockSearchQuery, setStockSearchQuery] = useState("");
+const [stockSearchResults, setStockSearchResults] = useState<StockSearchItem[]>([]);
+const [stockSearchLoading, setStockSearchLoading] = useState(false);
+
 
   const sortedLeaders = useMemo(() => {
     const arr = [...leaders];
@@ -723,6 +741,101 @@ const [watchlistActionMsg, setWatchlistActionMsg] = useState("");
   }
 }
 
+async function handleStockSearch(query: string) {
+  const q = query.trim();
+  setStockSearchQuery(query);
+
+  if (!q) {
+    setStockSearchResults([]);
+    return;
+  }
+
+  setStockSearchLoading(true);
+  try {
+    const res = await fetch(
+      `${API_BASE_URL}/stocks/search?q=${encodeURIComponent(q)}&limit=8`,
+      { cache: "no-store" }
+    );
+    const json: StockSearchResponse = await res.json();
+    setStockSearchResults(json.results || []);
+  } catch {
+    setStockSearchResults([]);
+  } finally {
+    setStockSearchLoading(false);
+  }
+}
+
+async function handleAddSearchResultToWatchlist(symbol: string) {
+  try {
+    const res = await fetch(`${API_BASE_URL}/watchlists/add`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        watchlist: selectedWatchlist,
+        symbol,
+      }),
+    });
+
+    const json = await res.json();
+    if (!json.ok) {
+      setWatchlistActionMsg(json.error || "添加失败");
+      return;
+    }
+
+    setWatchlistActionMsg("已加入观察池");
+    setStockSearchQuery("");
+    setStockSearchResults([]);
+
+    setLeadersLoading(true);
+    const leadersRes = await fetch(
+      `${API_BASE_URL}/leaders?watchlist=${encodeURIComponent(selectedWatchlist)}`,
+      { cache: "no-store" }
+    );
+    const leadersJson: LeadersResponse = await leadersRes.json();
+    setLeaders(leadersJson.leaders || []);
+  } catch {
+    setWatchlistActionMsg("添加失败");
+  } finally {
+    setLeadersLoading(false);
+  }
+}
+
+async function handleRemoveFromWatchlist(symbol: string) {
+  try {
+    const res = await fetch(`${API_BASE_URL}/watchlists/remove`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        watchlist: selectedWatchlist,
+        symbol,
+      }),
+    });
+
+    const json = await res.json();
+    if (!json.ok) {
+      setWatchlistActionMsg(json.error || "删除失败");
+      return;
+    }
+
+    setWatchlistActionMsg("已删除");
+    setLeadersLoading(true);
+    const leadersRes = await fetch(
+      `${API_BASE_URL}/leaders?watchlist=${encodeURIComponent(selectedWatchlist)}`,
+      { cache: "no-store" }
+    );
+    const leadersJson: LeadersResponse = await leadersRes.json();
+    setLeaders(leadersJson.leaders || []);
+  } catch {
+    setWatchlistActionMsg("删除失败");
+  } finally {
+    setLeadersLoading(false);
+  }
+}
+
 function removeFavorite(s: string) {
     setFavorites((prev) => prev.filter((x) => x.symbol !== s));
   }
@@ -807,6 +920,42 @@ function removeFavorite(s: string) {
                   )}
                 </div>
 
+                <div className="mb-3">
+                  <div className="flex items-center gap-2">
+                    <input
+                      value={stockSearchQuery}
+                      onChange={(e) => handleStockSearch(e.target.value)}
+                      placeholder="代码/中文/首字母"
+                      className="border border-gray-300 rounded px-2 py-1 text-sm w-[140px]"
+                    />
+                    {watchlistActionMsg && (
+                      <span className="text-xs text-gray-600">{watchlistActionMsg}</span>
+                    )}
+                  </div>
+
+                  {stockSearchLoading ? (
+                    <div className="text-xs text-gray-500 mt-2">搜索中...</div>
+                  ) : stockSearchResults.length > 0 ? (
+                    <div className="mt-2 border border-gray-200 rounded bg-white">
+                      {stockSearchResults.map((item) => (
+                        <button
+                          key={item.ts_code || item.symbol}
+                          type="button"
+                          onClick={() => handleAddSearchResultToWatchlist(item.symbol)}
+                          className="w-full text-left px-3 py-2 border-b last:border-b-0 hover:bg-gray-50"
+                        >
+                          <div className="text-sm font-medium text-black">
+                            {item.name || item.symbol}
+                          </div>
+                          <div className="text-[11px] text-gray-500">
+                            {item.symbol} · {(item.initials || item.pinyin_initials || "").toLowerCase()}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+
                 {leadersLoading ? (
                   <div className="text-sm text-gray-600">加载中...</div>
                 ) : sortedLeaders.length === 0 ? (
@@ -848,6 +997,14 @@ function removeFavorite(s: string) {
                             {item.score ?? "-"}
                           </div>
                         </div>
+
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveFromWatchlist(item.symbol)}
+                          className="text-xs text-red-600 ml-2"
+                        >
+                          ×
+                        </button>
                       </div>
                     ))}
                   </div>

@@ -11,6 +11,7 @@ import tushare as ts
 import akshare as ak
 import threading
 from pydantic import BaseModel
+from pypinyin import lazy_pinyin
 
 app = FastAPI(title="A股买卖点助手 - Tushare版")
 
@@ -34,10 +35,56 @@ MARKET_SENTIMENT_CACHE = None
 MARKET_SENTIMENT_CACHE_TS = 0
 MARKET_SENTIMENT_TTL_SECONDS = 120
 
+STOCK_SEARCH_INDEX = None
+STOCK_SEARCH_INDEX_TS = 0
+STOCK_SEARCH_INDEX_TTL_SECONDS = 6 * 60 * 60
+
 
 
 STOCK_NAME_CACHE = None
 
+
+
+
+def get_pinyin_initials(name: str) -> str:
+    try:
+        return "".join(x[0] for x in lazy_pinyin(name) if x)
+    except Exception:
+        return ""
+
+
+def build_stock_search_index():
+    if not TOKEN:
+        return []
+
+    try:
+        pro_local = ts.pro_api(TOKEN)
+        df = pro_local.stock_basic(
+            exchange="",
+            list_status="L",
+            fields="ts_code,symbol,name"
+        )
+        if df is None or df.empty:
+            return []
+
+        out = []
+        for _, row in df.iterrows():
+            ts_code = str(row.get("ts_code", "")).strip()
+            symbol = str(row.get("symbol", "")).strip()
+            name = str(row.get("name", "")).strip()
+            if not symbol or not name:
+                continue
+
+            out.append({
+                "symbol": symbol,
+                "ts_code": ts_code,
+                "name": name,
+                "pinyin_initials": get_pinyin_initials(name),
+            })
+        return out
+    except Exception as e:
+        print("build_stock_search_index error:", e)
+        return []
 
 
 def fallback_stock_name(symbol: str | None = None, ts_code: str | None = None):
@@ -113,6 +160,11 @@ class WatchlistAddRequest(BaseModel):
     symbol: str
 
 
+class WatchlistRemoveRequest(BaseModel):
+    watchlist: str
+    symbol: str
+
+
 DEFAULT_WATCHLISTS = {
     "core": ["600519", "300870", "002851"],
     "ai_power": ["300870", "002851", "300750", "002594"],
@@ -123,6 +175,21 @@ WATCHLISTS_FILE = os.getenv(
     "WATCHLISTS_FILE",
     os.path.join(os.path.dirname(__file__), "data", "watchlists.json"),
 )
+
+
+STOCK_INDEX_PATH = os.path.join(
+    os.path.dirname(__file__),
+    "data",
+    "stock_search_index.json",
+)
+
+
+def load_stock_index():
+    if not os.path.exists(STOCK_INDEX_PATH):
+        return []
+    with open(STOCK_INDEX_PATH, "r", encoding="utf-8") as f:
+        return json.load(f)
+
 
 
 def _ensure_watchlists_dir():
@@ -1182,6 +1249,11 @@ def get_market_sentiment_cached():
     return result
 
 
+
+
+
+def get_stock_search_index_cached():
+    return load_stock_index()
 
 
 def get_market_sentiment_quick():
@@ -2336,5 +2408,77 @@ def add_to_watchlist(payload: WatchlistAddRequest):
             "error": None,
         }
 
+    except Exception as e:
+        return {"ok": False, "error": safe_text(e)}
+
+
+@app.get("/stocks/search")
+def search_stocks(
+    q: str = Query("", description="代码/名称/拼音首字母"),
+    limit: int = Query(20, ge=1, le=50),
+):
+    try:
+        query = (q or "").strip().lower()
+        if not query:
+            return {"results": [], "count": 0, "error": None}
+
+        items = load_stock_index()
+        matches = []
+
+        for item in items:
+            symbol = str(item.get("symbol", "")).lower()
+            ts_code = str(item.get("ts_code", "")).lower()
+            name = str(item.get("name", "")).lower()
+            initials = str(item.get("pinyin_initials") or item.get("initials", "")).lower()
+
+            if (
+                query in symbol
+                or query in ts_code
+                or query in name
+                or initials.startswith(query)
+                or query in initials
+            ):
+                matches.append(item)
+
+        matches = matches[:limit]
+
+        return {
+            "results": matches,
+            "count": len(matches),
+            "error": None,
+        }
+    except Exception as e:
+        return {
+            "results": [],
+            "count": 0,
+            "error": safe_text(e),
+        }
+
+
+@app.post("/watchlists/remove")
+def remove_from_watchlist(payload: WatchlistRemoveRequest):
+    try:
+        watchlist = (payload.watchlist or "").strip()
+        symbol = (payload.symbol or "").strip().upper()
+
+        if not watchlist or watchlist not in WATCHLISTS:
+            return {"ok": False, "error": "观察池不存在"}
+
+        if "." in symbol:
+            symbol = symbol.split(".")[0]
+
+        WATCHLISTS[watchlist]["symbols"] = [
+            s for s in WATCHLISTS[watchlist]["symbols"]
+            if s != symbol
+        ]
+
+        save_watchlists()
+
+        return {
+            "ok": True,
+            "watchlist": watchlist,
+            "symbols": WATCHLISTS[watchlist]["symbols"],
+            "error": None,
+        }
     except Exception as e:
         return {"ok": False, "error": safe_text(e)}
