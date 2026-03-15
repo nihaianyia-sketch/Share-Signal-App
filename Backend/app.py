@@ -28,6 +28,12 @@ INDEX_HISTORY_MEM_CACHE_TS = {}
 INDEX_HISTORY_CACHE_LOCK = threading.Lock()
 INDEX_HISTORY_TTL_SECONDS = 6 * 60 * 60  # 6 hours
 
+WATCHLISTS = {
+    "core": ["600519", "300870", "002851"],
+    "ai_power": ["300870", "002851", "300750", "002594"],
+    "cpo": ["300308", "688256"],
+}
+
 
 STOCK_NAME_FILE = os.path.join(os.path.dirname(__file__), "stock_names.json")
 
@@ -2052,3 +2058,19 @@ def get_leaders(
             "watchlist": watchlist if isinstance(watchlist, str) else None,
             "error": safe_text(e)
         }
+
+@app.get("/watchlists")
+def get_watchlists():
+    try:
+        return {
+            "watchlists": sorted(list(WATCHLISTS.keys())),
+            "count": len(WATCHLISTS),
+            "error": None,
+        }
+    except Exception as e:
+        return {
+            "watchlists": [],
+            "count": 0,
+            "error": safe_text(e),
+        }
+
