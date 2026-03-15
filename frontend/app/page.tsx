@@ -677,24 +677,31 @@ export default function HomePage() {
                     {leaders.slice(0, 5).map((item, idx) => (
                       <div
                         key={`${item.symbol}-${idx}`}
-                        className="grid grid-cols-[32px_1fr_80px_80px] gap-2 items-center rounded border border-gray-300 px-3 py-2 bg-gray-50"
+                        className="grid grid-cols-[28px_1fr_72px_64px] gap-2 items-center rounded border border-gray-300 px-3 py-2 bg-gray-50"
                       >
                         <div className="text-sm font-bold text-gray-700">{idx + 1}</div>
-                        <div>
-                          <div className="text-sm font-semibold text-black">
+
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold text-black truncate">
                             {item.name || item.symbol}
                           </div>
-                          <div className="text-[11px] text-gray-500">
-                            {item.symbol} / {item.benchmark_name || "-"}
+                          <div className="text-[11px] text-gray-500 truncate">
+                            {item.symbol}{item.benchmark_name ? ` · ${item.benchmark_name}` : ""}
                           </div>
                         </div>
+
                         <div className="text-right">
-                          <div className="text-[11px] text-gray-500">RS20</div>
-                          <div className="text-sm font-semibold">{item.rs_20 ?? "-"}</div>
+                          <div className="text-[10px] text-gray-500">RS20</div>
+                          <div className="text-sm font-semibold">
+                            {item.rs_20 ?? "-"}
+                          </div>
                         </div>
+
                         <div className="text-right">
-                          <div className="text-[11px] text-gray-500">评分</div>
-                          <div className="text-sm font-semibold">{item.score ?? "-"}</div>
+                          <div className="text-[10px] text-gray-500">评分</div>
+                          <div className="text-sm font-semibold">
+                            {item.score ?? "-"}
+                          </div>
                         </div>
                       </div>
                     ))}
