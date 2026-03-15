@@ -90,20 +90,55 @@ DEFAULT_WATCHLISTS = {
     "cpo": ["300308", "688256"],
 }
 
-
 WATCHLISTS_FILE = os.getenv(
     "WATCHLISTS_FILE",
     os.path.join(os.path.dirname(__file__), "data", "watchlists.json"),
 )
 
 
-
 def _ensure_watchlists_dir():
     os.makedirs(os.path.dirname(WATCHLISTS_FILE), exist_ok=True)
 
 
+def load_watchlists():
+    global WATCHLISTS
+
+    _ensure_watchlists_dir()
+
+    if os.path.exists(WATCHLISTS_FILE):
+        try:
+            with open(WATCHLISTS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            if isinstance(data, dict):
+                clean = {}
+                for k, v in data.items():
+                    if not isinstance(k, str) or not isinstance(v, list):
+                        continue
+                    clean[k] = []
+                    for x in v:
+                        s = str(x).strip().upper()
+                        if "." in s:
+                            s = s.split(".")[0]
+                        if s.isdigit() and len(s) == 6 and s not in clean[k]:
+                            clean[k].append(s)
+
+                WATCHLISTS = clean if clean else {k: list(v) for k, v in DEFAULT_WATCHLISTS.items()}
+                return WATCHLISTS
+        except Exception:
+            pass
+
+    WATCHLISTS = {k: list(v) for k, v in DEFAULT_WATCHLISTS.items()}
+    save_watchlists()
+    return WATCHLISTS
+
+
+
+WATCHLISTS = {}
+load_watchlists()
 
 def git_commit_watchlists():
+
     """
     自动把 watchlists.json 提交到 GitHub
     """
