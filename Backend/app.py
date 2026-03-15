@@ -102,84 +102,6 @@ def _ensure_watchlists_dir():
     os.makedirs(os.path.dirname(WATCHLISTS_FILE), exist_ok=True)
 
 
-def load_watchlists():
-    global WATCHLISTS
-
-    _ensure_watchlists_dir()
-
-    if os.path.exists(WATCHLISTS_FILE):
-        try:
-            with open(WATCHLISTS_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-
-            if isinstance(data, dict):
-                clean = {}
-                for k, v in data.items():
-                    if not isinstance(k, str):
-                        continue
-                    if not isinstance(v, list):
-                        continue
-                    clean[k] = []
-                    for x in v:
-                        s = str(x).strip().upper()
-                        if "." in s:
-                            s = s.split(".")[0]
-                        if s.isdigit() and len(s) == 6 and s not in clean[k]:
-                            clean[k].append(s)
-
-                WATCHLISTS = clean if clean else DEFAULT_WATCHLISTS.copy()
-                return WATCHLISTS
-        except Exception:
-            pass
-
-    WATCHLISTS = {k: list(v) for k, v in DEFAULT_WATCHLISTS.items()}
-    save_watchlists()
-    return WATCHLISTS
-
-
-
-    try:
-        import requests
-
-        api_url = f"https://api.github.com/repos/{        headers = {
-            "Authorization": f"Bearer {            "Accept": "application/vnd.github+json",
-        }
-
-        sha = None
-        get_resp = requests.get(
-            api_url,
-            headers=headers,
-            params={"ref":             timeout=20,
-        )
-
-        if get_resp.status_code == 200:
-            existing = get_resp.json()
-            sha = existing.get("sha")
-        elif get_resp.status_code != 404:
-            return False, f"GitHub 读取失败: {get_resp.status_code} {get_resp.text[:200]}"
-
-        content_text = json.dumps(WATCHLISTS, ensure_ascii=False, indent=2) + "\n"
-        content_b64 = base64.b64encode(content_text.encode("utf-8")).decode("utf-8")
-
-        payload = {
-            "message": "Update watchlists from app",
-            "content": content_b64,
-            "branch":         }
-        if sha:
-            payload["sha"] = sha
-
-        put_resp = requests.put(api_url, headers=headers, json=payload, timeout=20)
-
-        if put_resp.status_code not in (200, 201):
-            return False, f"GitHub 写入失败: {put_resp.status_code} {put_resp.text[:200]}"
-
-        return True, None
-
-    except Exception as e:
-        return False, safe_text(e)
-
-
-
 
 def git_commit_watchlists():
     """
@@ -219,16 +141,6 @@ def save_watchlists():
 
     git_commit_watchlists()
 
-    ok, err = sync_watchlists_to_github()
-    return ok, err
-
-
-WATCHLISTS = {}
-load_watchlists()
-
-
-
-STOCK_NAME_FILE = os.path.join(os.path.dirname(__file__), "stock_names.json")
 
 def load_stock_names():
     try:
@@ -2290,7 +2202,7 @@ def add_to_watchlist(payload: WatchlistAddRequest):
         if symbol not in WATCHLISTS[watchlist]:
             WATCHLISTS[watchlist].append(symbol)
 
-        sync_ok, sync_err = save_watchlists()
+        save_watchlists()
 
         return {
             "ok": True,
