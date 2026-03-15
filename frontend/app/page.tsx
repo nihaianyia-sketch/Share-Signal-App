@@ -1,5 +1,12 @@
 "use client";
 
+
+const WATCHLIST_LABELS: Record<string,string> = {
+  core: "核心观察",
+  ai_power: "AI电源",
+  cpo: "CPO光模块",
+};
+
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL || "https://share-signal-app.onrender.com";
 
