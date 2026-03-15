@@ -9,6 +9,7 @@ import pandas as pd
 import tushare as ts
 import akshare as ak
 import threading
+from pydantic import BaseModel
 
 app = FastAPI(title="A股买卖点助手 - Tushare版")
 
@@ -75,6 +76,11 @@ def get_stock_name_map():
         STOCK_NAME_CACHE = {}
 
     return STOCK_NAME_CACHE
+
+
+class WatchlistAddRequest(BaseModel):
+    watchlist: str
+    symbol: str
 
 
 WATCHLISTS = {
@@ -2120,3 +2126,38 @@ def get_watchlists():
             "error": safe_text(e),
         }
 
+
+
+@app.post("/watchlists/add")
+def add_to_watchlist(payload: WatchlistAddRequest):
+    try:
+        watchlist = (payload.watchlist or "").strip()
+        symbol = (payload.symbol or "").strip().upper()
+
+        if not watchlist:
+            return {"ok": False, "error": "观察池名称不能为空"}
+
+        if not symbol:
+            return {"ok": False, "error": "股票代码不能为空"}
+
+        if "." in symbol:
+            symbol = symbol.split(".")[0]
+
+        if not symbol.isdigit() or len(symbol) != 6:
+            return {"ok": False, "error": "股票代码需为6位数字"}
+
+        if watchlist not in WATCHLISTS:
+            WATCHLISTS[watchlist] = []
+
+        if symbol not in WATCHLISTS[watchlist]:
+            WATCHLISTS[watchlist].append(symbol)
+
+        return {
+            "ok": True,
+            "watchlist": watchlist,
+            "symbols": WATCHLISTS[watchlist],
+            "error": None,
+        }
+
+    except Exception as e:
+        return {"ok": False, "error": safe_text(e)}

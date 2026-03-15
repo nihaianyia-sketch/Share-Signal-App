@@ -404,6 +404,8 @@ export default function HomePage() {
   const [leaders, setLeaders] = useState<LeaderItem[]>([]);
   const [leaderSortBy, setLeaderSortBy] = useState<"rs_20" | "rs_10" | "rs_5">("rs_20");
   const [leadersLoading, setLeadersLoading] = useState(false);
+const [newWatchlistSymbol, setNewWatchlistSymbol] = useState("");
+const [watchlistActionMsg, setWatchlistActionMsg] = useState("");
 
   const sortedLeaders = useMemo(() => {
     const arr = [...leaders];
@@ -677,7 +679,51 @@ export default function HomePage() {
     });
   }
 
-  function removeFavorite(s: string) {
+  async function handleAddToWatchlist() {
+  const symbol = newWatchlistSymbol.trim();
+
+  if (!symbol) {
+    setWatchlistActionMsg("请输入代码");
+    return;
+  }
+
+  try {
+    const res = await fetch(`${API_BASE_URL}/watchlists/add`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        watchlist: selectedWatchlist,
+        symbol,
+      }),
+    });
+
+    const json = await res.json();
+
+    if (!json.ok) {
+      setWatchlistActionMsg(json.error || "添加失败");
+      return;
+    }
+
+    setWatchlistActionMsg("已加入观察池");
+    setNewWatchlistSymbol("");
+
+    setLeadersLoading(true);
+    const leadersRes = await fetch(
+      `${API_BASE_URL}/leaders?watchlist=${encodeURIComponent(selectedWatchlist)}`,
+      { cache: "no-store" }
+    );
+    const leadersJson: LeadersResponse = await leadersRes.json();
+    setLeaders(leadersJson.leaders || []);
+  } catch {
+    setWatchlistActionMsg("添加失败");
+  } finally {
+    setLeadersLoading(false);
+  }
+}
+
+function removeFavorite(s: string) {
     setFavorites((prev) => prev.filter((x) => x.symbol !== s));
   }
 
@@ -740,6 +786,25 @@ export default function HomePage() {
                       </option>
                     ))}
                   </select>
+                </div>
+
+                <div className="flex items-center gap-2 mb-3">
+                  <input
+                    value={newWatchlistSymbol}
+                    onChange={(e) => setNewWatchlistSymbol(e.target.value)}
+                    placeholder="输入代码"
+                    className="border border-gray-300 rounded px-2 py-1 text-sm w-[88px]"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAddToWatchlist}
+                    className="px-2 py-1 text-sm rounded border border-gray-300 bg-black text-white"
+                  >
+                    加入
+                  </button>
+                  {watchlistActionMsg && (
+                    <span className="text-xs text-gray-600">{watchlistActionMsg}</span>
+                  )}
                 </div>
 
                 {leadersLoading ? (
