@@ -405,7 +405,18 @@ export default function HomePage() {
   const [watchlists, setWatchlists] = useState<string[]>([]);
   const [selectedWatchlist, setSelectedWatchlist] = useState<string>("core");
   const [leaders, setLeaders] = useState<LeaderItem[]>([]);
+  const [leaderSortBy, setLeaderSortBy] = useState<"rs_20" | "rs_10" | "rs_5">("rs_20");
   const [leadersLoading, setLeadersLoading] = useState(false);
+
+  const sortedLeaders = useMemo(() => {
+    const arr = [...leaders];
+    arr.sort((a, b) => {
+      const av = a?.[leaderSortBy] ?? -9999;
+      const bv = b?.[leaderSortBy] ?? -9999;
+      return Number(bv) - Number(av);
+    });
+    return arr;
+  }, [leaders, leaderSortBy]);
 
 
 
@@ -657,11 +668,32 @@ export default function HomePage() {
         <aside className="lg:col-span-1">
           
               <section className="border border-gray-400 rounded p-4 mb-4 bg-white text-black">
-                <div className="flex items-center justify-between gap-3 mb-3">
+                <div className="flex items-start justify-between gap-3 mb-3">
                   <div>
                     <h2 className="text-lg font-semibold mb-1">观察池雷达</h2>
                     <p className="text-xs text-gray-600">快速查看观察池内相对强弱靠前的股票。</p>
+                    <div className="flex gap-1 mt-2">
+                      {[
+                        { key: "rs_20", label: "RS20" },
+                        { key: "rs_10", label: "RS10" },
+                        { key: "rs_5", label: "RS5" },
+                      ].map((item) => (
+                        <button
+                          key={item.key}
+                          type="button"
+                          onClick={() => setLeaderSortBy(item.key as "rs_20" | "rs_10" | "rs_5")}
+                          className={`px-2 py-1 text-xs rounded border ${
+                            leaderSortBy === item.key
+                              ? "bg-black text-white border-black"
+                              : "bg-white text-gray-700 border-gray-300"
+                          }`}
+                        >
+                          {item.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
+
                   <select
                     className="border border-gray-300 rounded px-2 py-1 text-sm bg-white"
                     value={selectedWatchlist}
@@ -669,7 +701,7 @@ export default function HomePage() {
                   >
                     {watchlists.map((w) => (
                       <option key={w} value={w}>
-                        {w}
+                        {WATCHLIST_LABELS[w] || w}
                       </option>
                     ))}
                   </select>
@@ -677,11 +709,11 @@ export default function HomePage() {
 
                 {leadersLoading ? (
                   <div className="text-sm text-gray-600">加载中...</div>
-                ) : leaders.length === 0 ? (
+                ) : sortedLeaders.length === 0 ? (
                   <div className="text-sm text-gray-600">当前观察池暂无可显示结果。</div>
                 ) : (
                   <div className="space-y-2">
-                    {leaders.slice(0, 5).map((item, idx) => (
+                    {sortedLeaders.slice(0, 5).map((item, idx) => (
                       <div
                         key={`${item.symbol}-${idx}`}
                         className="grid grid-cols-[28px_1fr_72px_64px] gap-2 items-center rounded border border-gray-300 px-3 py-2 bg-gray-50"
@@ -698,9 +730,15 @@ export default function HomePage() {
                         </div>
 
                         <div className="text-right">
-                          <div className="text-[10px] text-gray-500">RS20</div>
+                          <div className="text-[10px] text-gray-500">
+                            {leaderSortBy === "rs_20" ? "RS20" : leaderSortBy === "rs_10" ? "RS10" : "RS5"}
+                          </div>
                           <div className="text-sm font-semibold">
-                            {item.rs_20 ?? "-"}
+                            {leaderSortBy === "rs_20"
+                              ? (item.rs_20 ?? "-")
+                              : leaderSortBy === "rs_10"
+                              ? (item.rs_10 ?? "-")
+                              : (item.rs_5 ?? "-")}
                           </div>
                         </div>
 
