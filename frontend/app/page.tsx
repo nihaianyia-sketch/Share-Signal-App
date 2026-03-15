@@ -1144,8 +1144,8 @@ export default function HomePage() {
                       </div>
 
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
-                        <IndicatorCard title="上涨家数" value={marketSentiment.stats?.up_count} />
-                        <IndicatorCard title="下跌家数" value={marketSentiment.stats?.down_count} />
+                        <IndicatorCard title="上涨家数" value={marketSentiment.stats?.up_count} note={marketSentiment?.stats?.breadth_error ? "缓存数据" : "实时数据"} />
+                        <IndicatorCard title="下跌家数" value={marketSentiment.stats?.down_count} note={marketSentiment?.stats?.breadth_error ? "缓存数据" : "实时数据"} />
                         <IndicatorCard title="涨停数" value={marketSentiment.stats?.limit_up} />
                         <IndicatorCard title="跌停数" value={marketSentiment.stats?.limit_down} />
                       </div>
