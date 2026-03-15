@@ -740,37 +740,47 @@ def _filter_index_df_by_date(df, start_date: str, end_date: str):
 
 
 
+
 def get_index_history_multi(ts_code: str, start_date: str, end_date: str):
 
     cache_key = ts_code
 
+    # memory cache
     with INDEX_HISTORY_CACHE_LOCK:
         cached_df = INDEX_HISTORY_MEM_CACHE.get(cache_key)
         cached_ts = INDEX_HISTORY_MEM_CACHE_TS.get(cache_key)
 
     if cached_df is not None and cached_ts is not None:
         if time.time() - cached_ts <= INDEX_HISTORY_TTL_SECONDS:
-            df = _filter_index_df_by_date(cached_df, start_date, end_date)
-            if df is not None:
-                return df
+            filtered = _filter_index_df_by_date(cached_df, start_date, end_date)
+            if filtered is not None:
+                return filtered
 
     cache_dir = os.path.join(os.path.dirname(__file__), "cache", "index")
     os.makedirs(cache_dir, exist_ok=True)
     cache_file = os.path.join(cache_dir, f"{ts_code}.csv")
 
+    def _save_and_return(df_full):
+        df_full = df_full.copy().sort_values("trade_date").reset_index(drop=True)
+        df_full.to_csv(cache_file, index=False)
+
+        with INDEX_HISTORY_CACHE_LOCK:
+            INDEX_HISTORY_MEM_CACHE[cache_key] = df_full.copy()
+            INDEX_HISTORY_MEM_CACHE_TS[cache_key] = time.time()
+
+        return _filter_index_df_by_date(df_full, start_date, end_date)
+
+    # disk cache
     if os.path.exists(cache_file):
         try:
-            df = pd.read_csv(cache_file)
-            filtered = _filter_index_df_by_date(df, start_date, end_date)
-
+            df_disk = pd.read_csv(cache_file)
+            filtered = _filter_index_df_by_date(df_disk, start_date, end_date)
             if filtered is not None:
                 with INDEX_HISTORY_CACHE_LOCK:
-                    INDEX_HISTORY_MEM_CACHE[cache_key] = df.copy()
+                    INDEX_HISTORY_MEM_CACHE[cache_key] = df_disk.copy()
                     INDEX_HISTORY_MEM_CACHE_TS[cache_key] = time.time()
-
                 print("using cached index history", ts_code)
                 return filtered
-
         except Exception:
             pass
 
@@ -795,17 +805,7 @@ def get_index_history_multi(ts_code: str, start_date: str, end_date: str):
         "000688.SH": "000688.SS",
     }
 
-    def _save_and_return(df_full):
-        os.makedirs(cache_dir, exist_ok=True)
-        df_full.to_csv(cache_file, index=False)
-
-        with INDEX_HISTORY_CACHE_LOCK:
-            INDEX_HISTORY_MEM_CACHE[cache_key] = df_full.copy()
-            INDEX_HISTORY_MEM_CACHE_TS[cache_key] = time.time()
-
-        return _filter_index_df_by_date(df_full, start_date, end_date)
-
-    # source 1: AKShare hist
+    # source 1: akshare hist
     symbol1 = symbol_map_hist.get(ts_code)
     if symbol1 is not None:
         for attempt in range(2):
@@ -831,8 +831,8 @@ def get_index_history_multi(ts_code: str, start_date: str, end_date: str):
                         if col in df.columns:
                             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-                    keep_cols = ["trade_date", "open", "close", "high", "low", "volume", "amount", "pct_chg"]
-                    df = df[keep_cols].sort_values("trade_date").reset_index(drop=True)
+                    keep_cols = [c for c in ["trade_date", "open", "close", "high", "low", "volume", "amount", "pct_chg"] if c in df.columns]
+                    df = df[keep_cols]
 
                     filtered = _save_and_return(df)
                     if filtered is not None:
@@ -843,7 +843,7 @@ def get_index_history_multi(ts_code: str, start_date: str, end_date: str):
                     print("source1 failed:", e)
                 time.sleep(1)
 
-    # source 2: AKShare daily em
+    # source 2: akshare daily em
     symbol2 = symbol_map_daily.get(ts_code)
     if symbol2 is not None:
         for attempt in range(2):
@@ -854,22 +854,41 @@ def get_index_history_multi(ts_code: str, start_date: str, end_date: str):
                 if df is not None and not df.empty:
                     df = df.copy()
 
+                    rename_map = {}
+                    if "date" not in df.columns and "日期" in df.columns:
+                        rename_map["日期"] = "date"
+                    if "open" not in df.columns and "开盘" in df.columns:
+                        rename_map["开盘"] = "open"
+                    if "close" not in df.columns and "收盘" in df.columns:
+                        rename_map["收盘"] = "close"
+                    if "high" not in df.columns and "最高" in df.columns:
+                        rename_map["最高"] = "high"
+                    if "low" not in df.columns and "最低" in df.columns:
+                        rename_map["最低"] = "low"
+                    if "volume" not in df.columns and "成交量" in df.columns:
+                        rename_map["成交量"] = "volume"
+                    if "amount" not in df.columns and "成交额" in df.columns:
+                        rename_map["成交额"] = "amount"
+                    if "pct_chg" not in df.columns and "涨跌幅" in df.columns:
+                        rename_map["涨跌幅"] = "pct_chg"
+
+                    if rename_map:
+                        df = df.rename(columns=rename_map)
+
                     if "date" not in df.columns:
                         raise Exception("missing date column")
 
                     df["trade_date"] = pd.to_datetime(df["date"]).dt.strftime("%Y%m%d")
 
-                    for col in ["open", "close", "high", "low", "volume", "amount"]:
+                    for col in ["open", "close", "high", "low", "volume", "amount", "pct_chg"]:
                         if col in df.columns:
                             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-                    if "pct_chg" not in df.columns:
+                    if "pct_chg" not in df.columns and "close" in df.columns:
                         df["pct_chg"] = pd.to_numeric(df["close"], errors="coerce").pct_change() * 100
-                    else:
-                        df["pct_chg"] = pd.to_numeric(df["pct_chg"], errors="coerce")
 
                     keep_cols = [c for c in ["trade_date", "open", "close", "high", "low", "volume", "amount", "pct_chg"] if c in df.columns]
-                    df = df[keep_cols].sort_values("trade_date").reset_index(drop=True)
+                    df = df[keep_cols]
 
                     filtered = _save_and_return(df)
                     if filtered is not None:
@@ -880,7 +899,7 @@ def get_index_history_multi(ts_code: str, start_date: str, end_date: str):
                     print("source2 failed:", e)
                 time.sleep(1)
 
-    # source 3: Yahoo chart API
+    # source 3: yahoo chart api
     symbol3 = symbol_map_yf.get(ts_code)
     if symbol3 is not None:
         for attempt in range(2):
@@ -935,7 +954,7 @@ def get_index_history_multi(ts_code: str, start_date: str, end_date: str):
                 df["pct_chg"] = df["close"].pct_change() * 100
 
                 keep_cols = ["trade_date", "open", "close", "high", "low", "volume", "amount", "pct_chg"]
-                df = df[keep_cols].sort_values("trade_date").reset_index(drop=True)
+                df = df[keep_cols]
 
                 filtered = _save_and_return(df)
                 if filtered is not None:
