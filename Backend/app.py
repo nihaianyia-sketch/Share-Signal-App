@@ -1878,6 +1878,7 @@ def get_sector_strength(symbol: str):
     }
 
 
+
 @app.get("/leaders")
 def get_leaders(
     symbols: str = Query(
@@ -1887,69 +1888,49 @@ def get_leaders(
     limit: int = Query(20, ge=1, le=100, description="返回前N名"),
 ):
     try:
+        if not isinstance(symbols, str):
+            symbols = "600519,000858,300870,002851,300750,002594,601127,002475,300308,688256"
+
+        if not isinstance(limit, int):
+            limit = 20
+
         codes = [x.strip() for x in symbols.split(",") if x.strip()]
         if not codes:
-            return {"leaders": [], "error": "股票列表为空"}
+            return {"leaders": [], "count": 0, "universe_size": 0, "error": "股票列表为空"}
 
         results = []
 
         for raw_symbol in codes:
             try:
-                symbol = raw_symbol.upper()
+                resp = get_history(raw_symbol)
 
-                if "." in symbol:
-                    ts_code = symbol
-                    pure_code = symbol.split(".")[0]
-                else:
-                    pure_code = symbol
-                    if pure_code.startswith(("600","601","603","605","688")):
-                        ts_code = pure_code + ".SH"
-                    else:
-                        ts_code = pure_code + ".SZ"
-
-                if pure_code.startswith("300"):
-                    benchmark = {"name":"创业板指","ts_code":"399006.SZ"}
-                elif pure_code.startswith(("000","001","002","003")):
-                    benchmark = {"name":"深证成指","ts_code":"399001.SZ"}
-                else:
-                    benchmark = {"name":"上证综指","ts_code":"000001.SH"}
-
-                hist_df = get_hist_df(ts_code)
-                if hist_df is None or len(hist_df) < 21:
+                if not isinstance(resp, dict):
+                    continue
+                if resp.get("error"):
                     continue
 
-                start_date = str(hist_df["trade_date"].iloc[-30])
-                end_date = str(hist_df["trade_date"].iloc[-1])
-
-                bench_df = get_index_history_multi(
-                    benchmark["ts_code"],
-                    start_date,
-                    end_date
-                )
-
-                if bench_df is None or len(bench_df) < 2:
+                rs = resp.get("relative_strength", {})
+                if not rs or not rs.get("available"):
                     continue
 
-                rs = calc_relative_strength(hist_df, bench_df, benchmark["name"])
-
-                if not rs.get("available"):
-                    continue
-
+                pure_code = raw_symbol.split(".")[0].upper()
                 results.append({
                     "symbol": pure_code,
-                    "ts_code": ts_code,
+                    "ts_code": resp.get("ts_code"),
+                    "name": resp.get("name"),
+                    "benchmark_name": rs.get("benchmark_name"),
                     "rs_day": rs.get("rs_day"),
                     "rs_5": rs.get("rs_5"),
                     "rs_10": rs.get("rs_10"),
                     "rs_20": rs.get("rs_20"),
                     "score": rs.get("score"),
+                    "error": rs.get("error"),
                 })
 
             except Exception:
                 continue
 
         results = [x for x in results if x.get("rs_20") is not None]
-
         results.sort(key=lambda x: x["rs_20"], reverse=True)
 
         return {
@@ -1963,6 +1944,6 @@ def get_leaders(
         return {
             "leaders": [],
             "count": 0,
-            "error": str(e)
+            "universe_size": 0,
+            "error": safe_text(e)
         }
-
