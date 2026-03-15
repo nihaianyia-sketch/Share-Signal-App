@@ -1,4 +1,7 @@
-'use client';
+"use client";
+
+const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_BASE_URL || "https://share-signal-app.onrender.com";
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 
@@ -129,6 +132,34 @@ type TradingDecisionData = {
   summary?: string;
   reasons?: string[];
   composite_score?: number;
+};
+
+
+type WatchlistsResponse = {
+  watchlists: string[];
+  count: number;
+  error?: string | null;
+};
+
+type LeaderItem = {
+  symbol: string;
+  ts_code?: string | null;
+  name?: string | null;
+  benchmark_name?: string | null;
+  rs_day?: number | null;
+  rs_5?: number | null;
+  rs_10?: number | null;
+  rs_20?: number | null;
+  score?: number | null;
+  error?: string | null;
+};
+
+type LeadersResponse = {
+  leaders: LeaderItem[];
+  count: number;
+  universe_size: number;
+  watchlist?: string | null;
+  error?: string | null;
 };
 
 type CapitalFlow = {
@@ -364,6 +395,45 @@ export default function HomePage() {
   const [suggestions, setSuggestions] = useState<SearchItem[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const [watchlists, setWatchlists] = useState<string[]>([]);
+  const [selectedWatchlist, setSelectedWatchlist] = useState<string>("core");
+  const [leaders, setLeaders] = useState<LeaderItem[]>([]);
+  const [leadersLoading, setLeadersLoading] = useState(false);
+
+
+
+  useEffect(() => {
+    fetch(`${API_BASE_URL}/watchlists`)
+      .then((res) => res.json())
+      .then((res: WatchlistsResponse) => {
+        setWatchlists(res.watchlists || []);
+        if ((res.watchlists || []).includes("core")) {
+          setSelectedWatchlist("core");
+        } else if ((res.watchlists || []).length > 0) {
+          setSelectedWatchlist(res.watchlists![0]);
+        }
+      })
+      .catch(() => {
+        setWatchlists([]);
+      });
+  }, []);
+
+  useEffect(() => {
+    if (!selectedWatchlist) return;
+
+    setLeadersLoading(true);
+    fetch(`${API_BASE_URL}/leaders?watchlist=${encodeURIComponent(selectedWatchlist)}`)
+      .then((res) => res.json())
+      .then((res: LeadersResponse) => {
+        setLeaders(res.leaders || []);
+      })
+      .catch(() => {
+        setLeaders([]);
+      })
+      .finally(() => {
+        setLeadersLoading(false);
+      });
+  }, [selectedWatchlist]);
 
   useEffect(() => {
     try {
@@ -579,6 +649,59 @@ export default function HomePage() {
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
         <aside className="lg:col-span-1">
           
+              <section className="border border-gray-400 rounded p-4 mb-4 bg-white text-black">
+                <div className="flex items-center justify-between gap-3 mb-3">
+                  <div>
+                    <h2 className="text-lg font-semibold mb-1">观察池雷达</h2>
+                    <p className="text-xs text-gray-600">快速查看观察池内相对强弱靠前的股票。</p>
+                  </div>
+                  <select
+                    className="border border-gray-300 rounded px-2 py-1 text-sm bg-white"
+                    value={selectedWatchlist}
+                    onChange={(e) => setSelectedWatchlist(e.target.value)}
+                  >
+                    {watchlists.map((w) => (
+                      <option key={w} value={w}>
+                        {w}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {leadersLoading ? (
+                  <div className="text-sm text-gray-600">加载中...</div>
+                ) : leaders.length === 0 ? (
+                  <div className="text-sm text-gray-600">当前观察池暂无可显示结果。</div>
+                ) : (
+                  <div className="space-y-2">
+                    {leaders.slice(0, 5).map((item, idx) => (
+                      <div
+                        key={`${item.symbol}-${idx}`}
+                        className="grid grid-cols-[32px_1fr_80px_80px] gap-2 items-center rounded border border-gray-300 px-3 py-2 bg-gray-50"
+                      >
+                        <div className="text-sm font-bold text-gray-700">{idx + 1}</div>
+                        <div>
+                          <div className="text-sm font-semibold text-black">
+                            {item.name || item.symbol}
+                          </div>
+                          <div className="text-[11px] text-gray-500">
+                            {item.symbol} / {item.benchmark_name || "-"}
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-[11px] text-gray-500">RS20</div>
+                          <div className="text-sm font-semibold">{item.rs_20 ?? "-"}</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-[11px] text-gray-500">评分</div>
+                          <div className="text-sm font-semibold">{item.score ?? "-"}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+
               {tradingDecision && statusJudgement && (
                 <section className="border-2 border-gray-500 rounded-lg p-5 mb-4 bg-gray-50 text-black">
                   <div className="flex items-start justify-between gap-4 mb-4">
