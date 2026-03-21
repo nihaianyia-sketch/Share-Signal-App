@@ -12,6 +12,7 @@ import akshare as ak
 import threading
 from pydantic import BaseModel
 from pypinyin import lazy_pinyin
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 app = FastAPI(title="A股买卖点助手 - Tushare版")
 
@@ -34,6 +35,18 @@ INDEX_HISTORY_TTL_SECONDS = 6 * 60 * 60  # 6 hours
 MARKET_SENTIMENT_CACHE = None
 MARKET_SENTIMENT_CACHE_TS = 0
 MARKET_SENTIMENT_TTL_SECONDS = 120
+
+CAPITAL_FLOW_CACHE = {}
+CAPITAL_FLOW_CACHE_TS = {}
+CAPITAL_FLOW_TTL_SECONDS = 10 * 60
+
+SOURCE_TIMEOUTS = {
+    "capital_flow_source1": 1.5,
+    "capital_flow_source2": 1.0,
+    "market_sentiment_source1": 1.5,
+    "market_sentiment_source2": 0.8,
+}
+
 
 STOCK_SEARCH_INDEX = None
 STOCK_SEARCH_INDEX_TS = 0
@@ -881,10 +894,7 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
         print("timing market_sentiment =", round(time.time() - t_ms, 3))
 
         t_cf = time.time()
-        capital_flow = safe_call(
-    lambda: get_capital_flow(symbol),
-    {"available": False}
-)
+        capital_flow = get_capital_flow_multi_source(symbol)
         print("timing capital_flow =", round(time.time() - t_cf, 3))
 
         t_ss = time.time()
@@ -1304,6 +1314,57 @@ def safe_call(fn, default=None):
         print("safe_call error:", e)
         return default
 
+
+def run_with_timeout(fn, timeout_seconds, default=None):
+    try:
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(fn)
+            return fut.result(timeout=timeout_seconds)
+    except FuturesTimeoutError:
+        return default
+    except Exception as e:
+        print("run_with_timeout error:", e)
+        return default
+
+
+def result_available(x):
+    return isinstance(x, dict) and bool(x.get("available"))
+
+
+def try_sources_with_timeout(source_specs, fallback_result):
+    errors = []
+
+    for source_name, timeout_seconds, fn in source_specs:
+        result = run_with_timeout(fn, timeout_seconds, default=None)
+
+        if result_available(result):
+            out = dict(result)
+            out["source"] = source_name
+            return out
+
+        if isinstance(result, dict):
+            msg = result.get("error")
+            errors.append(f"{source_name}: {msg or 'unavailable'}")
+        else:
+            errors.append(f"{source_name}: timeout_or_exception")
+
+    out = dict(fallback_result)
+    out["source"] = "fallback"
+    out["error"] = " | ".join(errors) if errors else out.get("error")
+    return out
+
+
+def get_cached_capital_flow(symbol: str):
+    pure = (symbol or "").split(".")[0].strip().upper()
+    now = time.time()
+    cached = CAPITAL_FLOW_CACHE.get(pure)
+    ts = CAPITAL_FLOW_CACHE_TS.get(pure, 0)
+
+    if cached is not None and now - ts <= CAPITAL_FLOW_TTL_SECONDS:
+        out = dict(cached)
+        out["from_cache"] = True
+        return out
+    return None
 
 def get_market_sentiment_cached():
     global MARKET_SENTIMENT_CACHE, MARKET_SENTIMENT_CACHE_TS
@@ -2681,3 +2742,82 @@ def get_watchlist_items(
         }
     except Exception as e:
         return {"items": [], "count": 0, "error": safe_text(e)}
+
+
+def get_capital_flow_source2_tushare(symbol: str):
+    """
+    使用 Tushare moneyflow 作为日级 fallback
+    """
+    if not TOKEN:
+        return {"available": False, "error": "Tushare 未配置"}
+
+    try:
+        pro_local = ts.pro_api(TOKEN)
+        ts_code = symbol if "." in symbol else (
+            symbol + ".SH" if symbol.startswith("6") else symbol + ".SZ"
+        )
+
+        df = pro_local.moneyflow(
+            ts_code=ts_code,
+            limit=1
+        )
+
+        if df is None or df.empty:
+            return {"available": False, "error": "tushare 无资金流数据"}
+
+        row = df.iloc[0]
+
+        main = float(row.get("net_mf_amount", 0.0))
+
+        return {
+            "available": True,
+            "trend_label": "日级资金",
+            "main_inflow": main,
+            "main_inflow_3d": None,
+            "main_inflow_5d": None,
+            "super_inflow": None,
+            "big_inflow": None,
+            "medium_inflow": None,
+            "source_note": "tushare_moneyflow_daily",
+            "error": None,
+        }
+
+    except Exception as e:
+        return {"available": False, "error": safe_text(e)}
+
+
+def get_capital_flow_multi_source(symbol: str):
+    pure = (symbol or "").split(".")[0].strip().upper()
+
+    source_specs = [
+        (
+            "eastmoney_realtime",
+            SOURCE_TIMEOUTS["capital_flow_source1"],
+            lambda: get_capital_flow(pure),
+        ),
+        (
+            "tushare_daily",
+            SOURCE_TIMEOUTS["capital_flow_source2"],
+            lambda: get_capital_flow_source2_tushare(pure),
+        ),
+        (
+            "cache",
+            0.05,
+            lambda: get_cached_capital_flow(pure),
+        ),
+    ]
+
+    result = try_sources_with_timeout(
+        source_specs,
+        {
+            "available": False,
+            "from_cache": False,
+            "error": "所有资金流源均失败",
+        },
+    )
+
+    if result_available(result):
+        CAPITAL_FLOW_CACHE[pure] = dict(result)
+        CAPITAL_FLOW_CACHE_TS[pure] = time.time()
+
+    return result

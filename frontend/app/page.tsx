@@ -120,6 +120,8 @@ type MarketSentimentData = {
     limit_error?: string | null;
   };
   error?: string | null;
+  source?: string | null;
+  from_cache?: boolean | null;
 };
 
 
@@ -213,6 +215,8 @@ type CapitalFlow = {
   main_inflow_5d?: number;
   trend_label?: string;
   error?: string | null;
+  source?: string | null;
+  from_cache?: boolean | null;
 };
 
 type HistoryResponse = {
@@ -1208,7 +1212,10 @@ function removeFavorite(s: string) {
 
               {capitalFlow && (
                 <section className="border border-gray-400 rounded p-4 mb-4 bg-white text-black">
-                  <h2 className="text-xl font-semibold mb-3">资金信号</h2>
+                  <h2 className="text-xl font-semibold mb-1">资金信号</h2>
+                  <div className="text-xs text-gray-500 mb-3">
+                    来源：{capitalFlow?.source || "unknown"}
+                  </div>
 
                   {capitalFlow.available ? (
                     <>
@@ -1384,7 +1391,10 @@ function removeFavorite(s: string) {
 
               {marketSentiment && (
                 <section className="border border-gray-400 rounded p-4 mb-4 bg-white text-black">
-                  <h2 className="text-xl font-semibold mb-3">市场情绪指数</h2>
+                  <h2 className="text-xl font-semibold mb-1">市场情绪指数</h2>
+                  <div className="text-xs text-gray-500 mb-3">
+                    来源：{marketSentiment?.source || "unknown"}
+                  </div>
                   <p className="text-xs text-gray-600 mb-3">
                     定义：综合指数涨跌、涨跌家数、涨停跌停结构，反映市场整体风险偏好；分数越高，说明短线情绪越活跃。
                   </p>
