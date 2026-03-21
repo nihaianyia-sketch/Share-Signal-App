@@ -956,7 +956,7 @@ function removeFavorite(s: string) {
                   <input
                     value={newWatchlistSymbol}
                     onChange={(e) => setNewWatchlistSymbol(e.target.value)}
-                    placeholder="输入代码"
+                    placeholder="代码/中文/首字母"
                     className="border border-gray-300 rounded px-2 py-1 text-sm w-[88px]"
                   />
                   <button
