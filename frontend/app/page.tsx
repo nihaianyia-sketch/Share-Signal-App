@@ -444,6 +444,9 @@ export default function HomePage() {
 const [watchlistItems, setWatchlistItems] = useState<WatchlistMember[]>([]);
 const [watchlistItemsLoading, setWatchlistItemsLoading] = useState(false);
 const [watchlistActionMsg, setWatchlistActionMsg] = useState("");
+const [newWatchlistKey, setNewWatchlistKey] = useState("");
+const [newWatchlistLabel, setNewWatchlistLabel] = useState("");
+const [renameWatchlistLabel, setRenameWatchlistLabel] = useState("");
 const [stockSearchQuery, setStockSearchQuery] = useState("");
 const [stockSearchResults, setStockSearchResults] = useState<StockSearchItem[]>([]);
 const [stockSearchLoading, setStockSearchLoading] = useState(false);
@@ -813,6 +816,74 @@ async function handleAddSearchResultToWatchlist(symbol: string) {
   }
 }
 
+async function handleCreateWatchlist() {
+  const key = newWatchlistKey.trim().toLowerCase();
+  const label = newWatchlistLabel.trim();
+
+  if (!key || !label) {
+    setWatchlistActionMsg("请输入组 key 和标签");
+    return;
+  }
+
+  try {
+    const res = await fetch(`${API_BASE_URL}/watchlists/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key, label }),
+    });
+    const json = await res.json();
+
+    if (!json.ok) {
+      setWatchlistActionMsg(json.error || "新建失败");
+      return;
+    }
+
+    setWatchlistActionMsg("已新建");
+    setNewWatchlistKey("");
+    setNewWatchlistLabel("");
+
+    const wlRes = await fetch(`${API_BASE_URL}/watchlists`, { cache: "no-store" });
+    const wlJson: WatchlistsResponse = await wlRes.json();
+    setWatchlists(wlJson.watchlists || []);
+    setSelectedWatchlist(key);
+    loadWatchlistItems(key);
+  } catch {
+    setWatchlistActionMsg("新建失败");
+  }
+}
+
+async function handleRenameWatchlist() {
+  const label = renameWatchlistLabel.trim();
+
+  if (!selectedWatchlist || !label) {
+    setWatchlistActionMsg("请输入新标签");
+    return;
+  }
+
+  try {
+    const res = await fetch(`${API_BASE_URL}/watchlists/rename`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: selectedWatchlist, label }),
+    });
+    const json = await res.json();
+
+    if (!json.ok) {
+      setWatchlistActionMsg(json.error || "修改失败");
+      return;
+    }
+
+    setWatchlistActionMsg("已修改标签");
+    setRenameWatchlistLabel("");
+
+    const wlRes = await fetch(`${API_BASE_URL}/watchlists`, { cache: "no-store" });
+    const wlJson: WatchlistsResponse = await wlRes.json();
+    setWatchlists(wlJson.watchlists || []);
+  } catch {
+    setWatchlistActionMsg("修改失败");
+  }
+}
+
 async function handleRemoveFromWatchlist(symbol: string) {
   try {
     const res = await fetch(`${API_BASE_URL}/watchlists/remove`, {
@@ -959,6 +1030,46 @@ function removeFavorite(s: string) {
                       ))}
                     </div>
                   ) : null}
+                </div>
+
+                <div className="mb-3 space-y-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <input
+                      value={newWatchlistKey}
+                      onChange={(e) => setNewWatchlistKey(e.target.value)}
+                      placeholder="组key"
+                      className="border border-gray-300 rounded px-2 py-1 text-sm w-[88px]"
+                    />
+                    <input
+                      value={newWatchlistLabel}
+                      onChange={(e) => setNewWatchlistLabel(e.target.value)}
+                      placeholder="组标签"
+                      className="border border-gray-300 rounded px-2 py-1 text-sm w-[110px]"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleCreateWatchlist}
+                      className="px-2 py-1 text-sm rounded border border-gray-300 bg-black text-white"
+                    >
+                      新建组
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <input
+                      value={renameWatchlistLabel}
+                      onChange={(e) => setRenameWatchlistLabel(e.target.value)}
+                      placeholder="修改当前组标签"
+                      className="border border-gray-300 rounded px-2 py-1 text-sm w-[140px]"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleRenameWatchlist}
+                      className="px-2 py-1 text-sm rounded border border-gray-300 bg-white text-black"
+                    >
+                      改标签
+                    </button>
+                  </div>
                 </div>
 
                 <div className="mb-4 border border-gray-200 rounded bg-white p-3">
