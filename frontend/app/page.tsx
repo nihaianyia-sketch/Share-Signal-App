@@ -938,7 +938,15 @@ function removeFavorite(s: string) {
 
   return (
     <main className="min-h-screen max-w-7xl mx-auto p-6 bg-white text-black">
-      <h1 className="text-3xl font-bold mb-6 text-black">A股买卖点助手 V9</h1>
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-3xl font-bold text-black">A股买卖点助手 V9</h1>
+        <a
+          href="/market"
+          className="text-sm px-3 py-1 border border-gray-300 rounded hover:bg-gray-100"
+        >
+          市场总览 →
+        </a>
+      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
         <aside className="lg:col-span-1">
