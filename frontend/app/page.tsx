@@ -175,6 +175,19 @@ type StockSearchItem = {
   pinyin_initials?: string | null;
 };
 
+type WatchlistMember = {
+  symbol: string;
+  name?: string | null;
+};
+
+type WatchlistItemsResponse = {
+  key?: string;
+  label?: string;
+  items: WatchlistMember[];
+  count: number;
+  error?: string | null;
+};
+
 type StockSearchResponse = {
   results: StockSearchItem[];
   count: number;
@@ -424,6 +437,8 @@ export default function HomePage() {
   const [leaders, setLeaders] = useState<LeaderItem[]>([]);
   const [leaderSortBy, setLeaderSortBy] = useState<"rs_20" | "rs_10" | "rs_5">("rs_20");
   const [leadersLoading, setLeadersLoading] = useState(false);
+const [watchlistItems, setWatchlistItems] = useState<WatchlistMember[]>([]);
+const [watchlistItemsLoading, setWatchlistItemsLoading] = useState(false);
 const [newWatchlistSymbol, setNewWatchlistSymbol] = useState("");
 const [watchlistActionMsg, setWatchlistActionMsg] = useState("");
 const [stockSearchQuery, setStockSearchQuery] = useState("");
@@ -440,6 +455,28 @@ const [stockSearchLoading, setStockSearchLoading] = useState(false);
     });
     return arr;
   }, [leaders, leaderSortBy]);
+  async function loadWatchlistItems(key: string) {
+    if (!key) {
+      setWatchlistItems([]);
+      return;
+    }
+
+    setWatchlistItemsLoading(true);
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/watchlists/items?key=${encodeURIComponent(key)}`,
+        { cache: "no-store" }
+      );
+      const json: WatchlistItemsResponse = await res.json();
+      setWatchlistItems(json.items || []);
+    } catch {
+      setWatchlistItems([]);
+    } finally {
+      setWatchlistItemsLoading(false);
+    }
+  }
+
+
 
 
 
@@ -511,6 +548,11 @@ const [stockSearchLoading, setStockSearchLoading] = useState(false);
       clearTimeout(timer);
       controller.abort();
     };
+  }, [selectedWatchlist]);
+
+  useEffect(() => {
+    if (!selectedWatchlist) return;
+    loadWatchlistItems(selectedWatchlist);
   }, [selectedWatchlist]);
 
   useEffect(() => {
@@ -740,6 +782,7 @@ const [stockSearchLoading, setStockSearchLoading] = useState(false);
     );
     const leadersJson: LeadersResponse = await leadersRes.json();
     setLeaders(leadersJson.leaders || []);
+    loadWatchlistItems(selectedWatchlist);
   } catch {
     setWatchlistActionMsg("添加失败");
   } finally {
@@ -801,6 +844,7 @@ async function handleAddSearchResultToWatchlist(symbol: string) {
     );
     const leadersJson: LeadersResponse = await leadersRes.json();
     setLeaders(leadersJson.leaders || []);
+    loadWatchlistItems(selectedWatchlist);
   } catch {
     setWatchlistActionMsg("添加失败");
   } finally {
@@ -835,6 +879,7 @@ async function handleRemoveFromWatchlist(symbol: string) {
     );
     const leadersJson: LeadersResponse = await leadersRes.json();
     setLeaders(leadersJson.leaders || []);
+    loadWatchlistItems(selectedWatchlist);
   } catch {
     setWatchlistActionMsg("删除失败");
   } finally {
@@ -960,6 +1005,42 @@ function removeFavorite(s: string) {
                       ))}
                     </div>
                   ) : null}
+                </div>
+
+                <div className="mb-4 border border-gray-200 rounded bg-white p-3">
+                  <div className="text-sm font-semibold mb-2">当前观察池成员</div>
+
+                  {watchlistItemsLoading ? (
+                    <div className="text-xs text-gray-500">加载中...</div>
+                  ) : watchlistItems.length === 0 ? (
+                    <div className="text-xs text-gray-500">当前观察池暂无成员</div>
+                  ) : (
+                    <div className="space-y-1">
+                      {watchlistItems.map((item) => (
+                        <div
+                          key={item.symbol}
+                          className="flex items-center justify-between rounded border border-gray-200 px-2 py-2"
+                        >
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium text-black truncate">
+                              {item.name || item.symbol}
+                            </div>
+                            <div className="text-[11px] text-gray-500">
+                              {item.symbol}
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveFromWatchlist(item.symbol)}
+                            className="text-xs text-red-600 ml-2"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {leadersLoading ? (

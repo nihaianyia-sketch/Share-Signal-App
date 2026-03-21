@@ -2625,3 +2625,38 @@ def rename_watchlist(payload: WatchlistRenameRequest):
         }
     except Exception as e:
         return {"ok": False, "error": safe_text(e)}
+
+
+@app.get("/watchlists/items")
+def get_watchlist_items(
+    key: str = Query(..., description="观察池 key"),
+):
+    try:
+        wl = WATCHLISTS.get(key)
+        if not wl:
+            return {"items": [], "count": 0, "error": "观察池不存在"}
+
+        if isinstance(wl, list):
+            symbols = wl
+            label = key
+        else:
+            symbols = wl.get("symbols", [])
+            label = wl.get("label", key)
+
+        items = []
+        for s in symbols:
+            name = fallback_stock_name(s) or s
+            items.append({
+                "symbol": s,
+                "name": name,
+            })
+
+        return {
+            "key": key,
+            "label": label,
+            "items": items,
+            "count": len(items),
+            "error": None,
+        }
+    except Exception as e:
+        return {"items": [], "count": 0, "error": safe_text(e)}
