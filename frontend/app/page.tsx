@@ -927,19 +927,31 @@ function removeFavorite(s: string) {
                   ) : stockSearchResults.length > 0 ? (
                     <div className="mt-2 border border-gray-200 rounded bg-white">
                       {stockSearchResults.map((item) => (
-                        <button
+                        <div
                           key={item.ts_code || item.symbol}
-                          type="button"
-                          onClick={() => handleAddSearchResultToWatchlist(item.symbol)}
-                          className="w-full text-left px-3 py-2 border-b last:border-b-0 hover:bg-gray-50"
+                          className="w-full flex items-center justify-between px-3 py-2 border-b last:border-b-0 hover:bg-gray-50"
                         >
-                          <div className="text-sm font-medium text-black">
-                            {item.name || item.symbol}
-                          </div>
-                          <div className="text-[11px] text-gray-500">
-                            {item.symbol} · {(item.initials || item.pinyin_initials || "").toLowerCase()}
-                          </div>
-                        </button>
+                          <button
+                            type="button"
+                            onClick={() => handleSearch(item.symbol)}
+                            className="text-left flex-1 min-w-0"
+                          >
+                            <div className="text-sm font-medium text-black truncate">
+                              {item.name || item.symbol}
+                            </div>
+                            <div className="text-[11px] text-gray-500">
+                              {item.symbol} · {(item.initials || item.pinyin_initials || "").toLowerCase()}
+                            </div>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleAddSearchResultToWatchlist(item.symbol)}
+                            className="ml-2 px-2 py-1 text-xs rounded border border-gray-300 bg-black text-white shrink-0"
+                          >
+                            +
+                          </button>
+                        </div>
                       ))}
                     </div>
                   ) : null}
@@ -1194,41 +1206,49 @@ function removeFavorite(s: string) {
                 <p>成交额：{latest.amount}</p>
               </section>
 
-              {capitalFlow && capitalFlow.available && (
+              {capitalFlow && (
                 <section className="border border-gray-400 rounded p-4 mb-4 bg-white text-black">
                   <h2 className="text-xl font-semibold mb-3">资金信号</h2>
-                  <p className="text-xs text-gray-600 mb-3">
-                    定义：反映主力、大单与中小单资金流向。红色表示净流入，绿色表示净流出，中线为 0 轴；单日资金说明当天买卖强弱，3日/5日累计用于判断资金趋势是否持续。
-                  </p>
 
-                  <div className={`inline-block px-3 py-1 rounded-full border text-sm font-semibold mb-3 ${signalStyle(
-                    capitalFlow.trend_label
-                  )}`}>
-                    {capitalFlow.trend_label || '未知'}
-                  </div>
+                  {capitalFlow.available ? (
+                    <>
+                      <p className="text-xs text-gray-600 mb-3">
+                        定义：反映主力、大单与中小单资金流向。红色表示净流入，绿色表示净流出，中线为 0 轴；单日资金说明当天买卖强弱，3日/5日累计用于判断资金趋势是否持续。
+                      </p>
 
-                  <div className="grid grid-cols-2 md:grid-cols-2 gap-3 mb-4">
-                    <IndicatorCard
-                      title="资金趋势"
-                      value={capitalFlow.trend_label}
-                      note="结合单日与5日主力资金判断"
-                    />
-                    <IndicatorCard
-                      title="图形说明"
-                      value="红流入 / 绿流出"
-                      note="中线为0轴，便于对比资金方向与强弱"
-                    />
-                  </div>
+                      <div className={`inline-block px-3 py-1 rounded-full border text-sm font-semibold mb-3 ${signalStyle(
+                        capitalFlow.trend_label
+                      )}`}>
+                        {capitalFlow.trend_label || '未知'}
+                      </div>
 
-                  <div className="mt-4">
-                    <FlowBar title="主力资金" value={capitalFlow.main_inflow} />
-                    <FlowBar title="3日累计" value={capitalFlow.main_inflow_3d} />
-                    <FlowBar title="5日累计" value={capitalFlow.main_inflow_5d} />
-                    <FlowBar title="超大单" value={capitalFlow.super_inflow} />
-                    <FlowBar title="大单" value={capitalFlow.big_inflow} />
-                    <FlowBar title="中单" value={capitalFlow.medium_inflow} />
-                    <FlowBar title="小单" value={capitalFlow.small_inflow} />
-                  </div>
+                      <div className="grid grid-cols-2 md:grid-cols-2 gap-3 mb-4">
+                        <IndicatorCard
+                          title="资金趋势"
+                          value={capitalFlow.trend_label}
+                          note="结合单日与5日主力资金判断"
+                        />
+                        <IndicatorCard
+                          title="图形说明"
+                          value="红流入 / 绿流出"
+                          note="中线为0轴，便于对比资金方向与强弱"
+                        />
+                      </div>
+
+                      <div className="mt-4">
+                        <FlowBar title="主力资金" value={capitalFlow.main_inflow} />
+                        <FlowBar title="3日累计" value={capitalFlow.main_inflow_3d} />
+                        <FlowBar title="5日累计" value={capitalFlow.main_inflow_5d} />
+                        <FlowBar title="超大单" value={capitalFlow.super_inflow} />
+                        <FlowBar title="大单" value={capitalFlow.big_inflow} />
+                        <FlowBar title="中单" value={capitalFlow.medium_inflow} />
+                      </div>
+                    </>
+                  ) : (
+                    <div className="text-sm text-gray-600">
+                      {capitalFlow.error || "当前无可用资金流数据"}
+                    </div>
+                  )}
                 </section>
               )}
 

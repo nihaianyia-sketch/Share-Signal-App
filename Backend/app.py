@@ -902,7 +902,7 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
 
         return {
             "symbol": symbol,
-            "name": stock_name or fallback_stock_name(symbol, ts_code),
+            "name": stock_name or lookup_stock_name_from_index(symbol) or fallback_stock_name(symbol, ts_code),
             "ts_code": ts_code,
             "history": out_df.to_dict(orient="records"),
             "signal": signal,
