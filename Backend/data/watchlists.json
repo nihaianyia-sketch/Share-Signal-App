@@ -17,7 +17,9 @@
     "688256"
   ],
   "my_test": {
-    "label": "高弹性测试组",
-    "symbols": []
+    "label": "my_test",
+    "symbols": [
+      "601888"
+    ]
   }
 }
