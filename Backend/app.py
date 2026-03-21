@@ -41,10 +41,10 @@ CAPITAL_FLOW_CACHE_TS = {}
 CAPITAL_FLOW_TTL_SECONDS = 10 * 60
 
 SOURCE_TIMEOUTS = {
-    "capital_flow_source1": 1.5,
-    "capital_flow_source2": 1.0,
-    "market_sentiment_source1": 1.5,
-    "market_sentiment_source2": 0.8,
+    "capital_flow_source1": 0.8,
+    "capital_flow_source2": 0.8,
+    "market_sentiment_source1": 0.8,
+    "market_sentiment_source2": 0.4,
 }
 
 
@@ -1316,15 +1316,23 @@ def safe_call(fn, default=None):
 
 
 def run_with_timeout(fn, timeout_seconds, default=None):
+    ex = ThreadPoolExecutor(max_workers=1)
+    fut = ex.submit(fn)
     try:
-        with ThreadPoolExecutor(max_workers=1) as ex:
-            fut = ex.submit(fn)
-            return fut.result(timeout=timeout_seconds)
+        return fut.result(timeout=timeout_seconds)
     except FuturesTimeoutError:
+        fut.cancel()
+        ex.shutdown(wait=False, cancel_futures=True)
         return default
     except Exception as e:
         print("run_with_timeout error:", e)
+        ex.shutdown(wait=False, cancel_futures=True)
         return default
+    finally:
+        try:
+            ex.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
 
 
 def result_available(x):
@@ -1389,18 +1397,28 @@ def get_stock_search_index_cached():
 def get_market_sentiment_quick():
     global MARKET_SENTIMENT_CACHE, MARKET_SENTIMENT_CACHE_TS
 
-    now = time.time()
-    if MARKET_SENTIMENT_CACHE is not None and now - MARKET_SENTIMENT_CACHE_TS <= MARKET_SENTIMENT_TTL_SECONDS:
-        return MARKET_SENTIMENT_CACHE
+    source_specs = [
+        ("index_quick_sentiment", 0.35, lambda: get_market_sentiment_source2_index_only()),
+        ("market_sentiment_cache", 0.05, lambda: get_cached_market_sentiment()),
+    ]
 
-    return {
-        "available": False,
-        "score": 0,
-        "label": "中性",
-        "components": {},
-        "stats": {},
-        "error": "已跳过实时市场情绪以提升响应速度",
-    }
+    result = try_sources_with_timeout(
+        source_specs,
+        {
+            "available": False,
+            "score": 0,
+            "label": "中性",
+            "components": {},
+            "stats": {},
+            "error": "轻量市场情绪源失败",
+        },
+    )
+
+    if result_available(result):
+        MARKET_SENTIMENT_CACHE = dict(result)
+        MARKET_SENTIMENT_CACHE_TS = time.time()
+
+    return result
 
 
 def calc_relative_strength(stock_df, bench_df, benchmark_name):
@@ -2791,6 +2809,11 @@ def get_capital_flow_multi_source(symbol: str):
 
     source_specs = [
         (
+            "hsgt_market",
+            0.6,
+            lambda: get_capital_flow_source3_hsgt(pure),
+        ),
+        (
             "eastmoney_realtime",
             SOURCE_TIMEOUTS["capital_flow_source1"],
             lambda: get_capital_flow(pure),
@@ -2821,3 +2844,149 @@ def get_capital_flow_multi_source(symbol: str):
         CAPITAL_FLOW_CACHE_TS[pure] = time.time()
 
     return result
+
+
+def get_capital_flow_source3_hsgt(symbol: str):
+    if not TOKEN:
+        return {"available": False, "error": "Tushare 未配置"}
+
+    try:
+        pro_local = ts.pro_api(TOKEN)
+        end_date = datetime.now().strftime("%Y%m%d")
+        start_date = (datetime.now() - timedelta(days=10)).strftime("%Y%m%d")
+
+        df = pro_local.moneyflow_hsgt(
+            start_date=start_date,
+            end_date=end_date
+        )
+
+        if df is None or df.empty:
+            return {"available": False, "error": "hsgt 无数据"}
+
+        df = df.sort_values("trade_date")
+        row = df.iloc[-1]
+
+        north = row.get("north_money")
+        try:
+            north = float(north)
+        except Exception:
+            north = 0.0
+
+        return {
+            "available": True,
+            "trend_label": "北向资金",
+            "main_inflow": north,
+            "main_inflow_3d": None,
+            "main_inflow_5d": None,
+            "super_inflow": None,
+            "big_inflow": None,
+            "medium_inflow": None,
+            "source_note": "tushare_hsgt",
+            "error": None,
+        }
+    except Exception as e:
+        return {"available": False, "error": safe_text(e)}
+
+
+def get_market_sentiment_source3_news():
+    try:
+        df = ak.index_news_sentiment_scope()
+        if df is None or df.empty:
+            return {"available": False, "error": "news sentiment 无数据"}
+
+        last = df.iloc[-1]
+
+        score_raw = None
+        for col in ["情绪指数", "sentiment", "value"]:
+            if col in df.columns:
+                score_raw = last.get(col)
+                break
+
+        if score_raw is None:
+            return {"available": False, "error": "news sentiment 字段缺失"}
+
+        score_raw = float(score_raw)
+        score = int(round((score_raw - 50) / 5))
+
+        return {
+            "available": True,
+            "score": score,
+            "label": calc_sentiment_label(score),
+            "components": {"news_sentiment": score},
+            "stats": {"raw_news_sentiment": score_raw},
+            "error": None,
+        }
+    except Exception as e:
+        return {"available": False, "error": safe_text(e)}
+
+
+def get_cached_market_sentiment():
+    global MARKET_SENTIMENT_CACHE, MARKET_SENTIMENT_CACHE_TS
+    now = time.time()
+    if MARKET_SENTIMENT_CACHE is not None and now - MARKET_SENTIMENT_CACHE_TS <= MARKET_SENTIMENT_TTL_SECONDS:
+        out = dict(MARKET_SENTIMENT_CACHE)
+        out["from_cache"] = True
+        return out
+    return None
+
+
+def get_market_sentiment_source2_index_only():
+    try:
+        idx_spot_df = get_ak_index_snapshot()
+        if idx_spot_df is None or len(idx_spot_df) == 0:
+            return {
+                "available": False,
+                "error": "指数快照无数据",
+            }
+
+        score = 0
+        labels = []
+
+        for code in ["000001.SH", "399001.SZ", "399006.SZ"]:
+            row = pick_index_row(idx_spot_df, code)
+            if row is None:
+                continue
+
+            pct = row.get("pct_chg")
+            if pct is None:
+                pct = row.get("涨跌幅")
+
+            try:
+                pct = float(pct)
+            except Exception:
+                pct = 0.0
+
+            if pct > 1:
+                score += 2
+            elif pct > 0:
+                score += 1
+            elif pct < -1:
+                score -= 2
+            elif pct < 0:
+                score -= 1
+
+            labels.append({
+                "ts_code": code,
+                "pct_chg": pct,
+            })
+
+        if score >= 2:
+            label = "偏强"
+        elif score <= -2:
+            label = "偏弱"
+        else:
+            label = "中性"
+
+        return {
+            "available": True,
+            "score": score,
+            "label": label,
+            "components": {"index_only": score},
+            "stats": {"indices": labels},
+            "error": None,
+        }
+    except Exception as e:
+        return {
+            "available": False,
+            "error": safe_text(e),
+        }
