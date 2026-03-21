@@ -439,7 +439,6 @@ export default function HomePage() {
   const [leadersLoading, setLeadersLoading] = useState(false);
 const [watchlistItems, setWatchlistItems] = useState<WatchlistMember[]>([]);
 const [watchlistItemsLoading, setWatchlistItemsLoading] = useState(false);
-const [newWatchlistSymbol, setNewWatchlistSymbol] = useState("");
 const [watchlistActionMsg, setWatchlistActionMsg] = useState("");
 const [stockSearchQuery, setStockSearchQuery] = useState("");
 const [stockSearchResults, setStockSearchResults] = useState<StockSearchItem[]>([]);
@@ -745,50 +744,7 @@ const [stockSearchLoading, setStockSearchLoading] = useState(false);
     });
   }
 
-  async function handleAddToWatchlist() {
-  const symbol = newWatchlistSymbol.trim();
 
-  if (!symbol) {
-    setWatchlistActionMsg("请输入代码");
-    return;
-  }
-
-  try {
-    const res = await fetch(`${API_BASE_URL}/watchlists/add`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        watchlist: selectedWatchlist,
-        symbol,
-      }),
-    });
-
-    const json = await res.json();
-
-    if (!json.ok) {
-      setWatchlistActionMsg(json.error || "添加失败");
-      return;
-    }
-
-    setWatchlistActionMsg("已加入观察池");
-    setNewWatchlistSymbol("");
-
-    setLeadersLoading(true);
-    const leadersRes = await fetch(
-      `${API_BASE_URL}/leaders?watchlist=${encodeURIComponent(selectedWatchlist)}`,
-      { cache: "no-store" }
-    );
-    const leadersJson: LeadersResponse = await leadersRes.json();
-    setLeaders(leadersJson.leaders || []);
-    loadWatchlistItems(selectedWatchlist);
-  } catch {
-    setWatchlistActionMsg("添加失败");
-  } finally {
-    setLeadersLoading(false);
-  }
-}
 
 async function handleStockSearch(query: string) {
   const q = query.trim();
@@ -828,6 +784,7 @@ async function handleAddSearchResultToWatchlist(symbol: string) {
     });
 
     const json = await res.json();
+
     if (!json.ok) {
       setWatchlistActionMsg(json.error || "添加失败");
       return;
@@ -950,25 +907,6 @@ function removeFavorite(s: string) {
                       </option>
                     ))}
                   </select>
-                </div>
-
-                <div className="flex items-center gap-2 mb-3">
-                  <input
-                    value={newWatchlistSymbol}
-                    onChange={(e) => setNewWatchlistSymbol(e.target.value)}
-                    placeholder="代码/中文/首字母"
-                    className="border border-gray-300 rounded px-2 py-1 text-sm w-[88px]"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleAddToWatchlist}
-                    className="px-2 py-1 text-sm rounded border border-gray-300 bg-black text-white"
-                  >
-                    加入
-                  </button>
-                  {watchlistActionMsg && (
-                    <span className="text-xs text-gray-600">{watchlistActionMsg}</span>
-                  )}
                 </div>
 
                 <div className="mb-3">
