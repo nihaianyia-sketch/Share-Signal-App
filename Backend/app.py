@@ -46,8 +46,8 @@ HISTORY_CACHE_TS = {}
 HISTORY_CACHE_TTL_SECONDS = 300  # 5分钟
 
 SOURCE_TIMEOUTS = {
-    "capital_flow_source1": 0.8,
-    "capital_flow_source2": 0.8,
+    "capital_flow_source1": 1.5,
+    "capital_flow_source2": 1.5,
     "market_sentiment_source1": 0.8,
     "market_sentiment_source2": 0.4,
 }
@@ -1009,7 +1009,7 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
         }
 
         try:
-            idx_spot_df = get_ak_index_snapshot()
+            idx_spot_df = None
         except Exception:
             idx_spot_df = get_index_snapshot_cached()
 
@@ -1031,7 +1031,13 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
                     "error": None,
                 }
 
-            market_mood = compute_market_mood_from_snapshot(idx_spot_df)
+            market_mood = {
+            "score": 0,
+            "label": "中性",
+            "indices": [],
+            "available": False,
+            "error": "已跳过实时市场温度以提升响应速度",
+        }
 
         t_rs = time.time()
         bench_hist_df = None
@@ -1570,13 +1576,33 @@ def get_capital_flow_source2_tushare(symbol: str):
         return {"available": False, "error": safe_text(e)}
 
 
+
+
+def get_cached_capital_flow(symbol: str):
+    pure = (symbol or "").split(".")[0].strip().upper()
+    now = time.time()
+    cached = CAPITAL_FLOW_CACHE.get(pure)
+    ts = CAPITAL_FLOW_CACHE_TS.get(pure, 0)
+
+    if cached is not None and now - ts <= CAPITAL_FLOW_TTL_SECONDS:
+        out = dict(cached)
+        out["from_cache"] = True
+        return out
+    return None
+
 def get_capital_flow_multi_source(symbol: str):
     pure = (symbol or "").split(".")[0].strip().upper()
 
+    # === 1. 优先读缓存（核心优化）===
+    cached = get_cached_capital_flow(pure)
+    if result_available(cached):
+        return {**cached, "source": "cache"}
+
+    # === 2. 实时源 ===
     source_specs = [
         (
             "hsgt_market",
-            0.6,
+            1.5,
             lambda: get_capital_flow_source3_hsgt(pure),
         ),
         (
@@ -1589,11 +1615,6 @@ def get_capital_flow_multi_source(symbol: str):
             SOURCE_TIMEOUTS["capital_flow_source2"],
             lambda: get_capital_flow_source2_tushare(pure),
         ),
-        (
-            "cache",
-            0.05,
-            lambda: get_cached_capital_flow(pure),
-        ),
     ]
 
     result = try_sources_with_timeout(
@@ -1605,6 +1626,7 @@ def get_capital_flow_multi_source(symbol: str):
         },
     )
 
+    # === 3. 成功就写缓存（关键）===
     if result_available(result):
         CAPITAL_FLOW_CACHE[pure] = dict(result)
         CAPITAL_FLOW_CACHE_TS[pure] = time.time()
@@ -1698,7 +1720,7 @@ def get_cached_market_sentiment():
 
 def get_market_sentiment_source2_index_only():
     try:
-        idx_spot_df = get_ak_index_snapshot()
+        idx_spot_df = None
         if idx_spot_df is None or len(idx_spot_df) == 0:
             return {
                 "available": False,
@@ -1759,23 +1781,21 @@ def get_market_sentiment_source2_index_only():
 
 
 def get_market_sentiment_quick():
-    source_specs = [
-        ("index_quick_sentiment", 0.6, lambda: get_market_sentiment_source2_index_only()),
-        ("market_sentiment_cache", 0.05, lambda: get_cached_market_sentiment()),
-    ]
+    cached = get_cached_market_sentiment()
+    if cached is not None:
+        out = dict(cached)
+        out["source"] = out.get("source") or "cache"
+        return out
 
-    return try_sources_with_timeout(
-        source_specs,
-        {
-            "available": False,
-            "score": 0,
-            "label": "中性",
-            "components": {},
-            "stats": {},
-            "error": "市场情绪指数暂不可用",
-            "source": "fallback",
-        },
-    )
+    return {
+        "available": False,
+        "score": 0,
+        "label": "中性",
+        "components": {},
+        "stats": {},
+        "error": "已跳过实时市场情绪以提升响应速度",
+        "source": "fallback",
+    }
 
 
 def run_with_timeout(fn, timeout_seconds, default=None):
