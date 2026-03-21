@@ -1021,14 +1021,18 @@ function removeFavorite(s: string) {
                           key={item.symbol}
                           className="flex items-center justify-between rounded border border-gray-200 px-2 py-2"
                         >
-                          <div className="min-w-0">
+                          <button
+                            type="button"
+                            onClick={() => handleSearch(item.symbol)}
+                            className="min-w-0 flex-1 text-left hover:bg-gray-50 rounded px-1 py-1"
+                          >
                             <div className="text-sm font-medium text-black truncate">
                               {item.name || item.symbol}
                             </div>
                             <div className="text-[11px] text-gray-500">
                               {item.symbol}
                             </div>
-                          </div>
+                          </button>
 
                           <button
                             type="button"
