@@ -13,6 +13,7 @@ import threading
 from pydantic import BaseModel
 from pypinyin import lazy_pinyin
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+import time
 
 app = FastAPI(title="A股买卖点助手 - Tushare版")
 
@@ -39,6 +40,10 @@ MARKET_SENTIMENT_TTL_SECONDS = 120
 CAPITAL_FLOW_CACHE = {}
 CAPITAL_FLOW_CACHE_TS = {}
 CAPITAL_FLOW_TTL_SECONDS = 10 * 60
+
+HISTORY_CACHE = {}
+HISTORY_CACHE_TS = {}
+HISTORY_CACHE_TTL_SECONDS = 300  # 5分钟
 
 SOURCE_TIMEOUTS = {
     "capital_flow_source1": 0.8,
@@ -436,6 +441,21 @@ def calc_kdj(df: pd.DataFrame, n: int = 9):
     j = 3 * k - 2 * d
     return k, d, j
 
+
+def calc_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    high = pd.to_numeric(df["high"], errors="coerce")
+    low = pd.to_numeric(df["low"], errors="coerce")
+    close = pd.to_numeric(df["close"], errors="coerce")
+    prev_close = close.shift(1)
+
+    tr1 = high - low
+    tr2 = (high - prev_close).abs()
+    tr3 = (low - prev_close).abs()
+
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr = tr.rolling(period, min_periods=period).mean()
+    return atr
+
 def round_or_none(x, n=2):
     if pd.isna(x):
         return None
@@ -679,6 +699,64 @@ def calc_signal(df: pd.DataFrame):
         "component_scores": component_scores,
     }
 
+
+def calc_status_judgement(hist_df, signal: dict, relative_strength: dict):
+    try:
+        last = hist_df.iloc[-1]
+        close = float(last["close"])
+        ma5 = hist_df["close"].rolling(5).mean().iloc[-1]
+
+        atr_ratio = None
+        if "atr14" in hist_df.columns:
+            atr14 = hist_df["atr14"].iloc[-1]
+            try:
+                if atr14 is not None and close:
+                    atr_ratio = float(atr14) / float(close)
+            except Exception:
+                atr_ratio = None
+
+        reasons = []
+        label = "中性"
+
+        if pd.notna(ma5) and close >= ma5:
+            reasons.append("短线站上MA5")
+
+        try:
+            k = signal.get("indicators", {}).get("kdj_k")
+            d = signal.get("indicators", {}).get("kdj_d")
+            if k is not None and d is not None and k >= d:
+                reasons.append("KDJ偏强")
+        except Exception:
+            pass
+
+        rs_score = 0
+        if isinstance(relative_strength, dict):
+            rs_score = relative_strength.get("score") or 0
+            if rs_score > 0:
+                reasons.append("当日跑赢大盘")
+
+        if len(reasons) >= 2:
+            label = "趋势修复"
+        elif rs_score >= 2:
+            label = "相对强势"
+        elif (signal.get("score") or 0) >= 20:
+            label = "偏强运行"
+
+        return {
+            "label": label,
+            "reasons": reasons,
+            "atr_ratio": round(atr_ratio, 4) if atr_ratio is not None else None,
+            "rs_score": rs_score,
+        }
+    except Exception as e:
+        return {
+            "label": "中性",
+            "reasons": [],
+            "atr_ratio": None,
+            "rs_score": 0,
+            "error": safe_text(e),
+        }
+
 def get_ak_index_snapshot():
     return get_index_snapshot_multi()
 
@@ -720,6 +798,150 @@ def pick_index_row(df: pd.DataFrame, ts_code: str):
                 return row.iloc[0]
 
     return None
+
+
+INDEX_SNAPSHOT_CACHE = pd.DataFrame()
+INDEX_SNAPSHOT_CACHE_TS = 0.0
+BACKGROUND_REFRESH_INTERVAL_SECONDS = 300
+BACKGROUND_REFRESH_THREAD_STARTED = False
+
+
+def get_index_snapshot_cached():
+    global INDEX_SNAPSHOT_CACHE
+    if INDEX_SNAPSHOT_CACHE is None:
+        return pd.DataFrame()
+    return INDEX_SNAPSHOT_CACHE.copy()
+
+
+def compute_market_mood_from_snapshot(idx_spot_df: pd.DataFrame):
+    try:
+        if idx_spot_df is None or idx_spot_df.empty:
+            return {
+                "score": 0,
+                "label": "中性",
+                "indices": [],
+                "available": False,
+                "error": "指数缓存为空",
+            }
+
+        targets = [
+            ("上证综指", "000001.SH"),
+            ("深证成指", "399001.SZ"),
+            ("创业板指", "399006.SZ"),
+            ("科创50", "000688.SH"),
+        ]
+
+        indices = []
+        score = 0
+
+        for name, ts_code in targets:
+            row = pick_index_row(idx_spot_df, ts_code)
+            if row is None:
+                continue
+
+            pct = row.get("pct_chg")
+            if pct is None:
+                pct = row.get("涨跌幅")
+
+            close = row.get("最新价")
+            try:
+                pct = float(pct)
+            except Exception:
+                pct = 0.0
+
+            mood_score = 0
+            if pct >= 1:
+                mood_score = 4
+            elif pct > 0:
+                mood_score = 2
+            elif pct <= -1:
+                mood_score = -4
+            elif pct < 0:
+                mood_score = -2
+
+            score += mood_score
+            indices.append({
+                "name": name,
+                "ts_code": ts_code,
+                "trade_date": None,
+                "close": round_or_none(close),
+                "pct_chg": round_or_none(pct),
+                "mood_score": mood_score,
+            })
+
+        if score >= 6:
+            label = "偏热"
+        elif score >= 2:
+            label = "偏暖"
+        elif score <= -6:
+            label = "偏冷"
+        elif score <= -2:
+            label = "偏弱"
+        else:
+            label = "中性"
+
+        return {
+            "score": score,
+            "label": label,
+            "indices": indices,
+            "available": True,
+            "error": None,
+        }
+    except Exception as e:
+        return {
+            "score": 0,
+            "label": "中性",
+            "indices": [],
+            "available": False,
+            "error": safe_text(e),
+        }
+
+
+def refresh_background_caches_once():
+    global INDEX_SNAPSHOT_CACHE, INDEX_SNAPSHOT_CACHE_TS
+    global MARKET_SENTIMENT_CACHE, MARKET_SENTIMENT_CACHE_TS
+
+    try:
+        idx = get_index_snapshot_multi()
+        if idx is not None and not idx.empty:
+            INDEX_SNAPSHOT_CACHE = idx.copy()
+            INDEX_SNAPSHOT_CACHE_TS = time.time()
+
+            mood = compute_market_mood_from_snapshot(idx)
+
+            quick_sentiment = {
+                "available": True,
+                "score": mood.get("score", 0),
+                "label": mood.get("label", "中性"),
+                "components": {"index_only": mood.get("score", 0)},
+                "stats": {"indices": mood.get("indices", [])},
+                "error": None,
+                "source": "background_index_cache",
+            }
+
+            MARKET_SENTIMENT_CACHE = quick_sentiment
+            MARKET_SENTIMENT_CACHE_TS = time.time()
+            print("background cache refreshed")
+    except Exception as e:
+        print("background cache refresh error:", e)
+
+
+def background_refresh_loop():
+    while True:
+        refresh_background_caches_once()
+        time.sleep(BACKGROUND_REFRESH_INTERVAL_SECONDS)
+
+
+def start_background_refresh_thread():
+    global BACKGROUND_REFRESH_THREAD_STARTED
+    if BACKGROUND_REFRESH_THREAD_STARTED:
+        return
+
+    BACKGROUND_REFRESH_THREAD_STARTED = True
+    th = threading.Thread(target=background_refresh_loop, daemon=True)
+    th.start()
+    print("background refresh thread started")
+
 @app.get("/")
 def root():
     return {"message": "a-share backend with stock name and index fallback"}
@@ -727,17 +949,31 @@ def root():
 @app.get("/history")
 def get_history(symbol: str = Query(..., description="A股代码，如 600519 或 000001.SZ")):
     try:
+        t0 = time.time()
         pro = get_pro()
+        print("timing get_pro =", round(time.time() - t0, 3))
+
+        t1 = time.time()
         ts_code = to_ts_code(symbol)
+        print("timing to_ts_code =", round(time.time() - t1, 3))
 
         end_date = datetime.now().strftime("%Y%m%d")
         start_date = (datetime.now() - timedelta(days=260)).strftime("%Y%m%d")
 
-        hist_df = pro.daily(
-            ts_code=ts_code,
-            start_date=start_date,
-            end_date=end_date
-        )
+        t2 = time.time()
+        now = time.time()
+        if ts_code in HISTORY_CACHE and now - HISTORY_CACHE_TS.get(ts_code, 0) <= HISTORY_CACHE_TTL_SECONDS:
+            hist_df = HISTORY_CACHE[ts_code].copy()
+        else:
+            hist_df = pro.daily(
+                ts_code=ts_code,
+                start_date=start_date,
+                end_date=end_date
+            )
+            if hist_df is not None and not hist_df.empty:
+                HISTORY_CACHE[ts_code] = hist_df.copy()
+                HISTORY_CACHE_TS[ts_code] = now
+        print("timing hist_df =", round(time.time() - t2, 3))
 
         if hist_df is None or hist_df.empty:
             return {
@@ -748,15 +984,20 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
         hist_df = hist_df.sort_values("trade_date").reset_index(drop=True)
         signal = calc_signal(hist_df)
         out_df = hist_df.tail(80).reset_index(drop=True)
-        stock_name = get_stock_name_local(ts_code) or get_stock_name(pro, ts_code)
 
+        t3 = time.time()
+        stock_name = get_stock_name_local(ts_code) or get_stock_name(pro, ts_code)
+        print("timing stock_name =", round(time.time() - t3, 3))
+
+        t4 = time.time()
         benchmark_info = infer_benchmark(symbol)
+        print("timing infer_benchmark =", round(time.time() - t4, 3))
 
         benchmark = {
             "name": benchmark_info["name"],
             "ts_code": benchmark_info["ts_code"],
             "available": False,
-            "error": None,
+            "error": "基准缓存暂不可用",
         }
 
         market_mood = {
@@ -764,133 +1005,53 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
             "label": "中性",
             "indices": [],
             "available": False,
-            "error": None,
+            "error": "市场温度缓存暂不可用",
         }
 
-        try:
-            idx_spot_df = get_ak_index_snapshot()
-
+        idx_spot_df = get_index_snapshot_cached()
+        if idx_spot_df is not None and not idx_spot_df.empty:
             row = pick_index_row(idx_spot_df, benchmark_info["ts_code"])
             if row is not None:
+                pct = row.get("pct_chg")
+                if pct is None:
+                    pct = row.get("涨跌幅")
+                close = row.get("最新价")
+
                 benchmark = {
                     "name": benchmark_info["name"],
                     "ts_code": benchmark_info["ts_code"],
                     "trade_date": None,
-                    "close": round_or_none(row.get("最新价")),
-                    "pct_chg": round_or_none(row.get("涨跌幅")),
+                    "close": round_or_none(close),
+                    "pct_chg": round_or_none(pct),
                     "available": True,
                     "error": None,
                 }
 
-            market_indices = [
-                {"name": "上证综指", "ts_code": "000001.SH"},
-                {"name": "深证成指", "ts_code": "399001.SZ"},
-                {"name": "创业板指", "ts_code": "399006.SZ"},
-                {"name": "科创50", "ts_code": "000688.SH"},
-            ]
-
-            market_parts = []
-            mood_scores = []
-
-            for idx in market_indices:
-                row = pick_index_row(idx_spot_df, idx["ts_code"])
-                if row is None:
-                    continue
-
-                pct_chg = round_or_none(row.get("涨跌幅"))
-                latest = round_or_none(row.get("最新价"))
-
-                mood_score = 0
-                if pct_chg is not None:
-                    if pct_chg > 2:
-                        mood_score = 8
-                    elif pct_chg > 0:
-                        mood_score = 4
-                    elif pct_chg < -2:
-                        mood_score = -8
-                    elif pct_chg < 0:
-                        mood_score = -4
-
-                part = {
-                    "name": idx["name"],
-                    "ts_code": idx["ts_code"],
-                    "trade_date": None,
-                    "close": latest,
-                    "pct_chg": pct_chg,
-                    "mood_score": mood_score,
-                }
-                market_parts.append(part)
-                mood_scores.append(mood_score)
-
-            market_mood_score = round(sum(mood_scores) / len(mood_scores)) if mood_scores else 0
-            market_mood_score = clamp_score(market_mood_score)
-
-            if market_mood_score >= 6:
-                market_mood_label = "偏热"
-            elif market_mood_score >= 2:
-                market_mood_label = "偏暖"
-            elif market_mood_score <= -6:
-                market_mood_label = "偏冷"
-            elif market_mood_score <= -2:
-                market_mood_label = "偏弱"
-            else:
-                market_mood_label = "中性"
-
-            market_mood = {
-                "score": market_mood_score,
-                "label": market_mood_label,
-                "indices": market_parts,
-                "available": True if market_parts else False,
-                "error": None if market_parts else "未获取到指数数据",
-            }
-
-        except Exception:
-            benchmark["error"] = "指数接口不可用"
-            market_mood["error"] = "指数接口不可用"
-
-        bench_hist_df = get_index_history_multi(
-            benchmark_info["ts_code"],
-            start_date,
-            end_date
-        )
+            market_mood = compute_market_mood_from_snapshot(idx_spot_df)
 
         t_rs = time.time()
-        relative_strength = calc_relative_strength(
-            hist_df,
-            bench_hist_df,
-            benchmark_info["name"]
-        )
-
-        if (
-            (not relative_strength.get("available"))
-            and benchmark.get("pct_chg") is not None
-            and hist_df is not None
-            and len(hist_df) >= 2
-        ):
-            try:
-                stock_pct = float(hist_df["pct_chg"].iloc[-1])
-                bench_pct = float(benchmark["pct_chg"])
-                rs_day = round(stock_pct - bench_pct, 2)
-                relative_strength = {
-                    "available": True,
-                    "benchmark_name": benchmark_info["name"],
-                    "rs_day": rs_day,
-                    "rs_5": None,
-                    "rs_10": None,
-                    "rs_20": None,
-                    "score": int(round(rs_day / 2)),
-                    "error": "部分周期数据不足"
-                }
-            except Exception:
-                pass
-
+        bench_hist_df = None
+        if bench_hist_df is not None:
+            relative_strength = calc_relative_strength(
+                hist_df,
+                bench_hist_df,
+                benchmark_info["name"]
+            )
+        else:
+            relative_strength = {
+                "available": False,
+                "benchmark_name": benchmark_info["name"],
+                "rs_day": None,
+                "rs_5": None,
+                "rs_10": None,
+                "rs_20": None,
+                "score": 0,
+                "error": "基准历史数据暂不可用",
+            }
         print("timing relative_strength =", round(time.time() - t_rs, 3))
 
         t_ms = time.time()
-        market_sentiment = safe_call(
-    lambda: get_market_sentiment_quick(),
-    {"available": False}
-)
+        market_sentiment = get_market_sentiment_quick()
         print("timing market_sentiment =", round(time.time() - t_ms, 3))
 
         t_cf = time.time()
@@ -898,7 +1059,10 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
         print("timing capital_flow =", round(time.time() - t_cf, 3))
 
         t_ss = time.time()
-        sector_strength = {"available": False, "error": "已跳过以提升响应速度"}
+        sector_strength = {
+            "available": False,
+            "error": "已跳过以提升响应速度",
+        }
         print("timing sector_strength =", round(time.time() - t_ss, 3))
 
         status_judgement = calc_status_judgement(hist_df, signal, relative_strength)
@@ -911,7 +1075,7 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
         )
 
         return {
-            "symbol": symbol,
+            "symbol": symbol.split(".")[0],
             "name": stock_name or lookup_stock_name_from_index(symbol) or fallback_stock_name(symbol, ts_code),
             "ts_code": ts_code,
             "history": out_df.to_dict(orient="records"),
@@ -919,11 +1083,9 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
             "benchmark": benchmark,
             "market_mood": market_mood,
             "relative_strength": relative_strength,
-            
             "sector_strength": sector_strength,
             "market_sentiment": market_sentiment,
             "capital_flow": capital_flow,
-
             "status_judgement": status_judgement,
             "trading_decision": trading_decision,
         }
@@ -932,1406 +1094,6 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
             "error": "获取历史行情失败",
             "detail": safe_text(e)
         }
-
-def get_index_snapshot_em():
-    try:
-        df = ak.stock_zh_index_spot_em(symbol="沪深重要指数")
-        if df is not None and not df.empty:
-            df = df.copy()
-            if "代码" in df.columns:
-                df["代码"] = df["代码"].astype(str)
-            if "名称" in df.columns:
-                df["名称"] = df["名称"].astype(str)
-            return df
-    except Exception:
-        pass
-    return None
-
-def get_index_snapshot_sina():
-    try:
-        df = ak.stock_zh_index_spot_sina()
-        if df is not None and not df.empty:
-            df = df.copy()
-            if "代码" in df.columns:
-                df["原始代码"] = df["代码"].astype(str)
-                df["代码"] = (
-                    df["原始代码"]
-                    .str.replace("sh", "", regex=False)
-                    .str.replace("sz", "", regex=False)
-                )
-            if "名称" in df.columns:
-                df["名称"] = df["名称"].astype(str)
-            return df
-    except Exception:
-        pass
-    return None
-
-def get_index_snapshot_multi():
-    for fn in [get_index_snapshot_em, get_index_snapshot_sina]:
-        df = fn()
-        if df is not None and not df.empty:
-            return df
-    return None
-
-def get_index_history_ak_hist(ts_code: str, start_date: str, end_date: str):
-    try:
-        symbol_map = {
-            "000001.SH": "000001",
-            "399001.SZ": "399001",
-            "399006.SZ": "399006",
-            "000688.SH": "000688",
-        }
-        symbol = symbol_map.get(ts_code)
-        if not symbol:
-            return None
-
-        df = ak.index_zh_a_hist(
-            symbol=symbol,
-            period="daily",
-            start_date=start_date,
-            end_date=end_date
-        )
-        if df is None or df.empty:
-            return None
-
-        rename_map = {
-            "日期": "trade_date",
-            "开盘": "open",
-            "收盘": "close",
-            "最高": "high",
-            "最低": "low",
-            "涨跌幅": "pct_chg",
-        }
-        df = df.rename(columns=rename_map).copy()
-        df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.strftime("%Y%m%d")
-        for col in ["open", "close", "high", "low", "pct_chg"]:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-        return df.sort_values("trade_date").reset_index(drop=True)
-    except Exception:
-        return None
-
-def get_index_history_daily_em(ts_code: str, start_date: str, end_date: str):
-    try:
-        symbol_map = {
-            "000001.SH": "sh000001",
-            "399001.SZ": "sz399001",
-            "399006.SZ": "sz399006",
-            "000688.SH": "sh000688",
-        }
-        symbol = symbol_map.get(ts_code)
-        if not symbol:
-            return None
-
-        df = ak.stock_zh_index_daily_em(symbol=symbol)
-        if df is None or df.empty:
-            return None
-
-        df = df.copy()
-        if "date" in df.columns:
-            df["trade_date"] = pd.to_datetime(df["date"]).dt.strftime("%Y%m%d")
-        for col in ["open", "close", "high", "low"]:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-        if "close" in df.columns:
-            df["pct_chg"] = df["close"].pct_change() * 100
-
-        df = df[(df["trade_date"] >= start_date) & (df["trade_date"] <= end_date)]
-        return df.sort_values("trade_date").reset_index(drop=True)
-    except Exception:
-        return None
-
-import time
-import pandas as pd
-
-import os
-import time
-import pandas as pd
-
-CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
-
-import os
-import time
-import pandas as pd
-
-CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
-
-
-
-
-
-def _filter_index_df_by_date(df, start_date: str, end_date: str):
-    if df is None or getattr(df, "empty", True):
-        return None
-
-    df = df.copy()
-
-    if "trade_date" not in df.columns:
-        return None
-
-    df["trade_date"] = df["trade_date"].astype(str)
-    df = df[(df["trade_date"] >= start_date) & (df["trade_date"] <= end_date)]
-
-    if df.empty:
-        return None
-
-    return df.reset_index(drop=True)
-
-
-
-
-def get_index_history_multi(ts_code: str, start_date: str, end_date: str):
-
-    cache_key = ts_code
-
-    # memory cache
-    with INDEX_HISTORY_CACHE_LOCK:
-        cached_df = INDEX_HISTORY_MEM_CACHE.get(cache_key)
-        cached_ts = INDEX_HISTORY_MEM_CACHE_TS.get(cache_key)
-
-    if cached_df is not None and cached_ts is not None:
-        if time.time() - cached_ts <= INDEX_HISTORY_TTL_SECONDS:
-            filtered = _filter_index_df_by_date(cached_df, start_date, end_date)
-            if filtered is not None:
-                return filtered
-
-    cache_dir = os.path.join(os.path.dirname(__file__), "cache", "index")
-    os.makedirs(cache_dir, exist_ok=True)
-    cache_file = os.path.join(cache_dir, f"{ts_code}.csv")
-
-    def _save_and_return(df_full):
-        df_full = df_full.copy().sort_values("trade_date").reset_index(drop=True)
-        df_full.to_csv(cache_file, index=False)
-
-        with INDEX_HISTORY_CACHE_LOCK:
-            INDEX_HISTORY_MEM_CACHE[cache_key] = df_full.copy()
-            INDEX_HISTORY_MEM_CACHE_TS[cache_key] = time.time()
-
-        return _filter_index_df_by_date(df_full, start_date, end_date)
-
-    # disk cache
-    if os.path.exists(cache_file):
-        try:
-            df_disk = pd.read_csv(cache_file)
-            filtered = _filter_index_df_by_date(df_disk, start_date, end_date)
-            if filtered is not None:
-                with INDEX_HISTORY_CACHE_LOCK:
-                    INDEX_HISTORY_MEM_CACHE[cache_key] = df_disk.copy()
-                    INDEX_HISTORY_MEM_CACHE_TS[cache_key] = time.time()
-                print("using cached index history", ts_code)
-                return filtered
-        except Exception:
-            pass
-
-    symbol_map_hist = {
-        "000001.SH": "000001",
-        "399001.SZ": "399001",
-        "399006.SZ": "399006",
-        "000688.SH": "000688",
-    }
-
-    symbol_map_daily = {
-        "000001.SH": "sh000001",
-        "399001.SZ": "sz399001",
-        "399006.SZ": "sz399006",
-        "000688.SH": "sh000688",
-    }
-
-    symbol_map_yf = {
-        "000001.SH": "000001.SS",
-        "399001.SZ": "399001.SZ",
-        "399006.SZ": "399006.SZ",
-        "000688.SH": "000688.SS",
-    }
-
-    # source 1: akshare hist
-    symbol1 = symbol_map_hist.get(ts_code)
-    if symbol1 is not None:
-        for attempt in range(2):
-            try:
-                import akshare as ak
-
-                df = ak.index_zh_a_hist(symbol=symbol1, period="daily")
-                if df is not None and not df.empty:
-                    df = df.rename(columns={
-                        "日期": "date",
-                        "开盘": "open",
-                        "收盘": "close",
-                        "最高": "high",
-                        "最低": "low",
-                        "成交量": "volume",
-                        "成交额": "amount",
-                        "涨跌幅": "pct_chg",
-                    }).copy()
-
-                    df["trade_date"] = pd.to_datetime(df["date"]).dt.strftime("%Y%m%d")
-
-                    for col in ["open", "close", "high", "low", "volume", "amount", "pct_chg"]:
-                        if col in df.columns:
-                            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-                    keep_cols = [c for c in ["trade_date", "open", "close", "high", "low", "volume", "amount", "pct_chg"] if c in df.columns]
-                    df = df[keep_cols]
-
-                    filtered = _save_and_return(df)
-                    if filtered is not None:
-                        return filtered
-
-            except Exception as e:
-                if attempt == 1:
-                    print("source1 failed:", e)
-                time.sleep(1)
-
-    # source 2: akshare daily em
-    symbol2 = symbol_map_daily.get(ts_code)
-    if symbol2 is not None:
-        for attempt in range(2):
-            try:
-                import akshare as ak
-
-                df = ak.stock_zh_index_daily_em(symbol=symbol2)
-                if df is not None and not df.empty:
-                    df = df.copy()
-
-                    rename_map = {}
-                    if "date" not in df.columns and "日期" in df.columns:
-                        rename_map["日期"] = "date"
-                    if "open" not in df.columns and "开盘" in df.columns:
-                        rename_map["开盘"] = "open"
-                    if "close" not in df.columns and "收盘" in df.columns:
-                        rename_map["收盘"] = "close"
-                    if "high" not in df.columns and "最高" in df.columns:
-                        rename_map["最高"] = "high"
-                    if "low" not in df.columns and "最低" in df.columns:
-                        rename_map["最低"] = "low"
-                    if "volume" not in df.columns and "成交量" in df.columns:
-                        rename_map["成交量"] = "volume"
-                    if "amount" not in df.columns and "成交额" in df.columns:
-                        rename_map["成交额"] = "amount"
-                    if "pct_chg" not in df.columns and "涨跌幅" in df.columns:
-                        rename_map["涨跌幅"] = "pct_chg"
-
-                    if rename_map:
-                        df = df.rename(columns=rename_map)
-
-                    if "date" not in df.columns:
-                        raise Exception("missing date column")
-
-                    df["trade_date"] = pd.to_datetime(df["date"]).dt.strftime("%Y%m%d")
-
-                    for col in ["open", "close", "high", "low", "volume", "amount", "pct_chg"]:
-                        if col in df.columns:
-                            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-                    if "pct_chg" not in df.columns and "close" in df.columns:
-                        df["pct_chg"] = pd.to_numeric(df["close"], errors="coerce").pct_change() * 100
-
-                    keep_cols = [c for c in ["trade_date", "open", "close", "high", "low", "volume", "amount", "pct_chg"] if c in df.columns]
-                    df = df[keep_cols]
-
-                    filtered = _save_and_return(df)
-                    if filtered is not None:
-                        return filtered
-
-            except Exception as e:
-                if attempt == 1:
-                    print("source2 failed:", e)
-                time.sleep(1)
-
-    # source 3: yahoo chart api
-    symbol3 = symbol_map_yf.get(ts_code)
-    if symbol3 is not None:
-        for attempt in range(2):
-            try:
-                import requests
-                import time as _time
-
-                start_ts = int(pd.Timestamp(start_date).timestamp())
-                end_ts = int((pd.Timestamp(end_date) + pd.Timedelta(days=1)).timestamp())
-
-                url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol3}"
-                params = {
-                    "period1": start_ts,
-                    "period2": end_ts,
-                    "interval": "1d",
-                    "includePrePost": "false",
-                    "events": "div,splits",
-                }
-
-                r = requests.get(
-                    url,
-                    params=params,
-                    timeout=15,
-                    headers={"User-Agent": "Mozilla/5.0"},
-                )
-                r.raise_for_status()
-
-                data = r.json()
-                chart = data.get("chart", {})
-                result = chart.get("result")
-
-                if not result:
-                    raise Exception(f"empty yahoo chart result: {chart.get('error')}")
-
-                result = result[0]
-                timestamps = result.get("timestamp")
-                quote = result.get("indicators", {}).get("quote", [{}])[0]
-
-                if not timestamps or not quote:
-                    raise Exception("missing yahoo chart fields")
-
-                df = pd.DataFrame({
-                    "trade_date": pd.to_datetime(timestamps, unit="s").strftime("%Y%m%d"),
-                    "open": pd.to_numeric(quote.get("open"), errors="coerce"),
-                    "close": pd.to_numeric(quote.get("close"), errors="coerce"),
-                    "high": pd.to_numeric(quote.get("high"), errors="coerce"),
-                    "low": pd.to_numeric(quote.get("low"), errors="coerce"),
-                    "volume": pd.to_numeric(quote.get("volume"), errors="coerce"),
-                })
-
-                df["amount"] = pd.NA
-                df["pct_chg"] = df["close"].pct_change() * 100
-
-                keep_cols = ["trade_date", "open", "close", "high", "low", "volume", "amount", "pct_chg"]
-                df = df[keep_cols]
-
-                filtered = _save_and_return(df)
-                if filtered is not None:
-                    return filtered
-
-            except Exception as e:
-                if attempt == 1:
-                    print("source3 failed:", e)
-                _time.sleep(1)
-
-    return None
-
-
-def safe_call(fn, default=None):
-    try:
-        return fn()
-    except Exception as e:
-        print("safe_call error:", e)
-        return default
-
-
-def run_with_timeout(fn, timeout_seconds, default=None):
-    ex = ThreadPoolExecutor(max_workers=1)
-    fut = ex.submit(fn)
-    try:
-        return fut.result(timeout=timeout_seconds)
-    except FuturesTimeoutError:
-        fut.cancel()
-        ex.shutdown(wait=False, cancel_futures=True)
-        return default
-    except Exception as e:
-        print("run_with_timeout error:", e)
-        ex.shutdown(wait=False, cancel_futures=True)
-        return default
-    finally:
-        try:
-            ex.shutdown(wait=False, cancel_futures=True)
-        except Exception:
-            pass
-
-
-def result_available(x):
-    return isinstance(x, dict) and bool(x.get("available"))
-
-
-def try_sources_with_timeout(source_specs, fallback_result):
-    errors = []
-
-    for source_name, timeout_seconds, fn in source_specs:
-        result = run_with_timeout(fn, timeout_seconds, default=None)
-
-        if result_available(result):
-            out = dict(result)
-            out["source"] = source_name
-            return out
-
-        if isinstance(result, dict):
-            msg = result.get("error")
-            errors.append(f"{source_name}: {msg or 'unavailable'}")
-        else:
-            errors.append(f"{source_name}: timeout_or_exception")
-
-    out = dict(fallback_result)
-    out["source"] = "fallback"
-    out["error"] = " | ".join(errors) if errors else out.get("error")
-    return out
-
-
-def get_cached_capital_flow(symbol: str):
-    pure = (symbol or "").split(".")[0].strip().upper()
-    now = time.time()
-    cached = CAPITAL_FLOW_CACHE.get(pure)
-    ts = CAPITAL_FLOW_CACHE_TS.get(pure, 0)
-
-    if cached is not None and now - ts <= CAPITAL_FLOW_TTL_SECONDS:
-        out = dict(cached)
-        out["from_cache"] = True
-        return out
-    return None
-
-def get_market_sentiment_cached():
-    global MARKET_SENTIMENT_CACHE, MARKET_SENTIMENT_CACHE_TS
-
-    now = time.time()
-    if MARKET_SENTIMENT_CACHE is not None and now - MARKET_SENTIMENT_CACHE_TS <= MARKET_SENTIMENT_TTL_SECONDS:
-        return MARKET_SENTIMENT_CACHE
-
-    result = get_market_sentiment()
-    MARKET_SENTIMENT_CACHE = result
-    MARKET_SENTIMENT_CACHE_TS = now
-    return result
-
-
-
-
-
-def get_stock_search_index_cached():
-    return load_stock_index()
-
-
-def get_market_sentiment_quick():
-    global MARKET_SENTIMENT_CACHE, MARKET_SENTIMENT_CACHE_TS
-
-    source_specs = [
-        ("index_quick_sentiment", 0.35, lambda: get_market_sentiment_source2_index_only()),
-        ("market_sentiment_cache", 0.05, lambda: get_cached_market_sentiment()),
-    ]
-
-    result = try_sources_with_timeout(
-        source_specs,
-        {
-            "available": False,
-            "score": 0,
-            "label": "中性",
-            "components": {},
-            "stats": {},
-            "error": "轻量市场情绪源失败",
-        },
-    )
-
-    if result_available(result):
-        MARKET_SENTIMENT_CACHE = dict(result)
-        MARKET_SENTIMENT_CACHE_TS = time.time()
-
-    return result
-
-
-def calc_relative_strength(stock_df, bench_df, benchmark_name):
-    try:
-        import pandas as pd
-
-        if stock_df is None or bench_df is None:
-            return {
-                "available": False,
-                "benchmark_name": benchmark_name,
-                "rs_day": None,
-                "rs_5": None,
-                "rs_10": None,
-                "rs_20": None,
-                "score": 0,
-                "error": "缺少股票或指数数据"
-            }
-
-        df = pd.merge(
-            stock_df[["trade_date", "close"]],
-            bench_df[["trade_date", "close"]],
-            on="trade_date",
-            suffixes=("_stock", "_bench")
-        ).sort_values("trade_date")
-
-        if len(df) < 2:
-            return {
-                "available": False,
-                "benchmark_name": benchmark_name,
-                "rs_day": None,
-                "rs_5": None,
-                "rs_10": None,
-                "rs_20": None,
-                "score": 0,
-                "error": "对应大盘历史数据不足"
-            }
-
-        df["ret_stock"] = df["close_stock"].pct_change()
-        df["ret_bench"] = df["close_bench"].pct_change()
-        df["rs"] = (df["ret_stock"] - df["ret_bench"]) * 100
-
-        rs_day = df["rs"].iloc[-1]
-
-        def window_rs(n):
-            if len(df) >= n + 1:
-                s = df["close_stock"].iloc[-1] / df["close_stock"].iloc[-(n + 1)] - 1
-                b = df["close_bench"].iloc[-1] / df["close_bench"].iloc[-(n + 1)] - 1
-                return (s - b) * 100
-            return None
-
-        rs_5 = window_rs(5)
-        rs_10 = window_rs(10)
-        rs_20 = window_rs(20)
-
-        values = []
-        weights = []
-
-        if rs_5 is not None:
-            values.append(rs_5); weights.append(0.5)
-        if rs_10 is not None:
-            values.append(rs_10); weights.append(0.3)
-        if rs_20 is not None:
-            values.append(rs_20); weights.append(0.2)
-
-        if values:
-            score_raw = sum(v * w for v, w in zip(values, weights)) / sum(weights)
-        else:
-            score_raw = rs_day if rs_day is not None else 0
-
-        score = int(round(score_raw / 2)) if score_raw is not None else 0
-
-        error = None
-        if rs_5 is None or rs_10 is None or rs_20 is None:
-            error = "部分周期数据不足"
-
-        return {
-            "available": True,
-            "benchmark_name": benchmark_name,
-            "rs_day": round(float(rs_day), 2) if rs_day is not None else None,
-            "rs_5": round(float(rs_5), 2) if rs_5 is not None else None,
-            "rs_10": round(float(rs_10), 2) if rs_10 is not None else None,
-            "rs_20": round(float(rs_20), 2) if rs_20 is not None else None,
-            "score": score,
-            "error": error
-        }
-
-    except Exception as e:
-        return {
-            "available": False,
-            "benchmark_name": benchmark_name,
-            "rs_day": None,
-            "rs_5": None,
-            "rs_10": None,
-            "rs_20": None,
-            "score": 0,
-            "error": safe_text(e)
-        }
-
-def get_market_sentiment():
-    try:
-        idx_df = get_index_snapshot_multi()
-
-        index_targets = [
-            {"name": "上证综指", "ts_code": "000001.SH"},
-            {"name": "深证成指", "ts_code": "399001.SZ"},
-            {"name": "创业板指", "ts_code": "399006.SZ"},
-            {"name": "科创50", "ts_code": "000688.SH"},
-        ]
-
-        idx_pct_list = []
-        index_parts = []
-
-        for idx in index_targets:
-            row = pick_index_row(idx_df, idx["ts_code"])
-            if row is None:
-                continue
-
-            pct = row.get("涨跌幅")
-            if pct is None:
-                continue
-
-            idx_pct_list.append(float(pct))
-
-        avg_pct = sum(idx_pct_list) / len(idx_pct_list) if idx_pct_list else 0
-
-        if avg_pct >= 2:
-            index_move = 8
-        elif avg_pct >= 0.8:
-            index_move = 4
-        elif avg_pct <= -2:
-            index_move = -8
-        elif avg_pct <= -0.8:
-            index_move = -4
-        else:
-            index_move = 0
-
-        breadth = get_market_breadth()
-        limits = get_limit_stats()
-
-        breadth_score = breadth["score"]
-        limit_score = limits["score"]
-
-        weighted_parts = []
-        if index_parts is not None:
-            weighted_parts.append((index_move, 0.4))
-        if breadth.get("up") is not None and breadth.get("down") is not None:
-            weighted_parts.append((breadth_score, 0.3))
-        if limits.get("limit_up") is not None and limits.get("limit_down") is not None:
-            weighted_parts.append((limit_score, 0.3))
-
-        if weighted_parts:
-            total_weight = sum(w for _, w in weighted_parts)
-            total_score = round(sum(v * w for v, w in weighted_parts) / total_weight)
-        else:
-            total_score = 0
-
-        return {
-            "available": True,
-            "score": total_score,
-            "label": calc_sentiment_label(total_score),
-            "components": {
-                "index_move": index_move,
-                "breadth": breadth_score,
-                "limit_up_down": limit_score
-            },
-            "stats": {
-                "up_count": breadth.get("up"),
-                "down_count": breadth.get("down"),
-                "limit_up": limits.get("limit_up"),
-                "limit_down": limits.get("limit_down"),
-                "breadth_error": breadth.get("error"),
-                "limit_error": limits.get("error"),
-                "breadth_from_cache": breadth.get("from_cache")
-            },
-            "error": None
-        }
-
-    except Exception as e:
-        return {
-            "available": False,
-            "score": 0,
-            "label": "中性",
-            "error": safe_text(e)
-        }
-def calc_sentiment_label(score: int):
-    if score >= 6:
-        return "偏热"
-    if score >= 2:
-        return "偏暖"
-    if score <= -6:
-        return "偏冷"
-    if score <= -2:
-        return "偏弱"
-    return "中性"
-
-
-def get_market_breadth():
-    cache_dir = os.path.join(os.path.dirname(__file__), "cache")
-    cache_file = os.path.join(cache_dir, "market_breadth.json")
-
-    try:
-        df = ak.stock_zh_a_spot_em()
-        if df is None or df.empty or "涨跌幅" not in df.columns:
-            raise Exception("breadth source empty")
-
-        pct = pd.to_numeric(df["涨跌幅"], errors="coerce")
-        up = int((pct > 0).sum())
-        down = int((pct < 0).sum())
-
-        total = up + down
-        score = clamp_score(round(((up - down) / total) * 10)) if total > 0 else 0
-
-        os.makedirs(cache_dir, exist_ok=True)
-        pd.DataFrame([{
-            "up": up,
-            "down": down,
-            "score": score,
-        }]).to_json(cache_file, orient="records", force_ascii=False)
-
-        return {
-            "score": score,
-            "up": up,
-            "down": down,
-            "error": None,
-            "from_cache": False,
-        }
-
-    except Exception as e:
-        if os.path.exists(cache_file):
-            try:
-                cached = pd.read_json(cache_file)
-                if cached is not None and not cached.empty:
-                    row = cached.iloc[-1]
-                    return {
-                        "score": int(row.get("score", 0)),
-                        "up": int(row.get("up")) if pd.notna(row.get("up")) else None,
-                        "down": int(row.get("down")) if pd.notna(row.get("down")) else None,
-                        "error": f"实时涨跌家数获取失败，当前使用缓存：{safe_text(e)}",
-                        "from_cache": True,
-                    }
-            except Exception:
-                pass
-
-        return {
-            "score": 0,
-            "up": None,
-            "down": None,
-            "error": safe_text(e),
-            "from_cache": False,
-        }
-
-
-def get_limit_stats():
-    up = None
-    down = None
-    up_err = None
-    down_err = None
-
-    trade_date = None
-    try:
-        trade_hist = ak.tool_trade_date_hist_sina()
-        if trade_hist is not None and not trade_hist.empty:
-            dates = pd.to_datetime(trade_hist["trade_date"])
-            dates = dates[dates <= pd.Timestamp.today()]
-            if not dates.empty:
-                trade_date = dates.iloc[-1].strftime("%Y%m%d")
-    except Exception as e:
-        down_err = safe_text(e)
-
-    if trade_date is None:
-        trade_date = datetime.now().strftime("%Y%m%d")
-
-    try:
-        up_df = ak.stock_zt_pool_em(date=trade_date)
-        if up_df is not None:
-            up = len(up_df)
-    except Exception as e:
-        up_err = safe_text(e)
-
-    try:
-        down_df = ak.stock_zt_pool_dtgc_em(date=trade_date)
-        if down_df is not None:
-            down = len(down_df)
-    except Exception as e:
-        down_err = safe_text(e)
-
-    if up is None or down is None:
-        return {
-            "score": 0,
-            "limit_up": up,
-            "limit_down": down,
-            "error": f"date={trade_date}; up_err={up_err}; down_err={down_err}"
-        }
-
-    total = up + down
-    if total == 0:
-        score = 0
-    else:
-        score = clamp_score(round((up - down) / total * 10))
-
-    return {
-        "score": score,
-        "limit_up": up,
-        "limit_down": down,
-        "error": None
-    }
-
-
-def calc_atr(df: pd.DataFrame, period: int = 14):
-    high = pd.to_numeric(df["high"], errors="coerce")
-    low = pd.to_numeric(df["low"], errors="coerce")
-    close = pd.to_numeric(df["close"], errors="coerce")
-
-    prev_close = close.shift(1)
-
-    tr1 = high - low
-    tr2 = (high - prev_close).abs()
-    tr3 = (low - prev_close).abs()
-
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    atr = tr.rolling(period).mean()
-
-    return atr
-
-
-def calc_status_judgement(df: pd.DataFrame, signal: dict, relative_strength: dict):
-    try:
-        last = df.iloc[-1]
-        atr_ratio = signal.get("indicators", {}).get("atr_ratio")
-        rs_score = relative_strength.get("score", 0) if relative_strength else 0
-        rs_day = relative_strength.get("rs_day") if relative_strength else None
-        label = "震荡整理"
-        reasons = []
-
-        ma5 = signal.get("indicators", {}).get("ma5")
-        ma10 = signal.get("indicators", {}).get("ma10")
-        ma20 = signal.get("indicators", {}).get("ma20")
-        rsi14 = signal.get("indicators", {}).get("rsi14")
-        macd = signal.get("indicators", {}).get("macd")
-        macd_signal = signal.get("indicators", {}).get("macd_signal")
-        kdj_k = signal.get("indicators", {}).get("kdj_k")
-        kdj_d = signal.get("indicators", {}).get("kdj_d")
-        close = signal.get("indicators", {}).get("close")
-
-        if (
-            ma5 is not None and ma10 is not None and ma20 is not None
-            and macd is not None and macd_signal is not None
-            and close is not None
-            and ma5 > ma10 > ma20
-            and close > ma5
-            and macd > macd_signal
-            and rs_score >= 2
-        ):
-            label = "强势上升"
-            reasons = ["均线多头", "MACD偏强", "相对大盘偏强"]
-
-        elif (
-            ma5 is not None and ma10 is not None and ma20 is not None
-            and macd is not None and macd_signal is not None
-            and ma5 < ma10 < ma20
-            and macd < macd_signal
-            and rs_score <= -2
-        ):
-            label = "下行趋势"
-            reasons = ["均线空头", "MACD偏弱", "相对大盘偏弱"]
-
-        elif (
-            rsi14 is not None and kdj_k is not None and kdj_d is not None
-            and close is not None and ma5 is not None
-            and rsi14 < 35
-            and kdj_k > kdj_d
-            and close >= ma5
-        ):
-            label = "超卖反弹观察"
-            reasons = ["RSI偏低", "KDJ修复", "价格回到短均线上方"]
-
-        elif (
-            close is not None and ma5 is not None
-            and kdj_k is not None and kdj_d is not None
-            and close > ma5
-            and kdj_k > kdj_d
-            and (rs_day is not None and rs_day > 0)
-        ):
-            label = "趋势修复"
-            reasons = ["短线站上MA5", "KDJ偏强", "当日跑赢大盘"]
-
-        elif atr_ratio is not None and atr_ratio > 0.04:
-            label = "高波动博弈"
-            reasons = ["ATR波动率较高", "短线波动明显放大"]
-
-        elif atr_ratio is not None and atr_ratio < 0.015:
-            label = "低波整理"
-            reasons = ["ATR波动率较低", "市场偏盘整"]
-
-        else:
-            reasons = ["趋势与动量信号混合", "暂以整理看待"]
-
-        return {
-            "label": label,
-            "reasons": reasons,
-            "atr_ratio": atr_ratio,
-            "rs_score": rs_score,
-        }
-    except Exception as e:
-        return {
-            "label": "未知",
-            "reasons": [safe_text(e)],
-            "atr_ratio": None,
-            "rs_score": 0,
-        }
-
-
-def calc_trading_decision(signal: dict, relative_strength: dict, market_sentiment: dict, status_judgement: dict, capital_flow: dict):
-    try:
-        signal_score = signal.get("score", 0) if signal else 0
-        rs_score = relative_strength.get("score", 0) if relative_strength else 0
-        market_score = market_sentiment.get("score", 0) if market_sentiment else 0
-        status_label = status_judgement.get("label", "") if status_judgement else ""
-
-        indicators = signal.get("indicators", {}) if signal else {}
-        rsi14 = indicators.get("rsi14")
-        macd = indicators.get("macd")
-        macd_signal = indicators.get("macd_signal")
-        close = indicators.get("close")
-        ma5 = indicators.get("ma5")
-        ma10 = indicators.get("ma10")
-        ma20 = indicators.get("ma20")
-        atr_ratio = indicators.get("atr_ratio")
-
-        reasons = []
-        action = "观望等待"
-        bias = "中性"
-        confidence = 50
-        horizon = "短线观察"
-        execution_hint = "等待更明确的趋势或动量确认。"
-        summary = "信号分化，暂不适合激进参与。"
-
-        composite = 0.5 * signal_score + 0.3 * rs_score + 0.2 * market_score
-
-        capital_score = 0
-        if capital_flow and capital_flow.get("available"):
-            main_flow = capital_flow.get("main_inflow")
-            main_flow_5d = capital_flow.get("main_inflow_5d")
-
-            if main_flow is not None and main_flow_5d is not None:
-                if main_flow > 0 and main_flow_5d > 0:
-                    capital_score = 3
-                    reasons.append("主力资金单日与5日累计均为净流入")
-                elif main_flow < 0 and main_flow_5d < 0:
-                    capital_score = -3
-                    reasons.append("主力资金单日与5日累计均为净流出")
-                elif main_flow > 0:
-                    capital_score = 1
-                    reasons.append("主力资金单日净流入")
-                elif main_flow < 0:
-                    capital_score = -1
-                    reasons.append("主力资金单日净流出")
-
-        composite = composite + 0.2 * capital_score
-
-
-        if ma5 is not None and ma10 is not None and ma20 is not None:
-            if ma5 > ma10 > ma20:
-                reasons.append("均线多头排列")
-            elif ma5 < ma10 < ma20:
-                reasons.append("均线空头排列")
-
-        if macd is not None and macd_signal is not None:
-            if macd > macd_signal:
-                reasons.append("MACD偏强")
-            else:
-                reasons.append("MACD偏弱")
-
-        if rs_score >= 2:
-            reasons.append("相对大盘偏强")
-        elif rs_score <= -2:
-            reasons.append("相对大盘偏弱")
-
-        if market_score >= 2:
-            reasons.append("市场情绪偏暖")
-        elif market_score <= -2:
-            reasons.append("市场情绪偏弱")
-
-        if status_label:
-            reasons.append(f"状态判断：{status_label}")
-
-        # 1) 强趋势多头
-        if composite >= 5 and rs_score >= 2 and market_score >= 0 and status_label in ["强势上升", "趋势修复"]:
-            action = "趋势做多"
-            bias = "偏多"
-            confidence = 78
-            horizon = "波段"
-            execution_hint = "优先等回踩短均线或放量突破时参与，不建议无条件追高。"
-            summary = "趋势、相对强弱和市场环境较一致，适合顺势寻找做多机会。"
-
-        # 2) 修复型机会
-        elif composite >= 2 and status_label == "趋势修复":
-            action = "轻仓试多"
-            bias = "谨慎偏多"
-            confidence = 66
-            horizon = "短线到波段"
-            execution_hint = "控制仓位，优先等待确认站稳 MA5/MA10。"
-            summary = "存在修复迹象，但中期趋势尚未完全扭转。"
-
-        # 3) 超卖反弹
-        elif status_label == "超卖反弹观察" or (rsi14 is not None and rsi14 < 25):
-            action = "反弹博弈"
-            bias = "短线博弈"
-            confidence = 61
-            horizon = "短线"
-            execution_hint = "更适合短线快进快出，不适合直接当成中线反转。"
-            summary = "处于超卖后的修复观察阶段，可关注短线反弹而非趋势反转。"
-
-        # 4) 偏弱但开始修复
-        elif composite > -2 and (status_label in ["趋势修复", "震荡整理"] or (ma5 is not None and close is not None and close >= ma5)):
-            action = "观察名单"
-            bias = "中性偏谨慎"
-            confidence = 58
-            horizon = "短线观察"
-            execution_hint = "先放入观察名单，等放量、站稳均线或相对强弱继续改善。"
-            summary = "部分信号改善，但仍缺少足够强的趋势确认。"
-
-        # 5) 明显弱势
-        elif composite <= -5 and rs_score <= -2:
-            action = "弱势回避"
-            bias = "偏空"
-            confidence = 80
-            horizon = "防守"
-            execution_hint = "不宜逆势抄底，优先等待弱势结构改善。"
-            summary = "个股偏弱且相对大盘不占优，当前应以回避为主。"
-
-        # 6) 普通谨慎状态
-        elif composite <= -2:
-            action = "观望等待"
-            bias = "中性偏谨慎"
-            confidence = 64
-            horizon = "短线观察"
-            execution_hint = "等待趋势改善、相对强弱转正或市场环境回暖后再看。"
-            summary = "整体信号略偏弱，不适合激进参与。"
-
-        # 根据中期均线位置微调
-        if close is not None and ma20 is not None and close < ma20:
-            confidence = max(35, confidence - 6)
-
-        # 高波动提醒
-        if atr_ratio is not None and atr_ratio > 0.04:
-            execution_hint += " 当前波动较大，需降低仓位、放宽止损。"
-
-        return {
-            "action": action,
-            "bias": bias,
-            "confidence": int(confidence),
-            "horizon": horizon,
-            "execution_hint": execution_hint,
-            "summary": summary,
-            "reasons": reasons[:6],
-            "composite_score": round(composite, 2),
-        }
-
-    except Exception as e:
-        return {
-            "action": "未知",
-            "bias": "未知",
-            "confidence": 0,
-            "horizon": "未知",
-            "execution_hint": "交易决策生成失败",
-            "summary": "交易决策生成失败",
-            "reasons": [safe_text(e)],
-            "composite_score": 0,
-        }
-
-
-
-
-def get_capital_flow(symbol: str):
-    try:
-        import akshare as ak
-
-        df = ak.stock_individual_fund_flow(stock=symbol)
-
-        if df is None:
-            return {
-                "available": False,
-                "error": "资金流接口返回空"
-            }
-
-        if getattr(df, "empty", True):
-            return {
-                "available": False,
-                "error": "资金流接口当前无数据"
-            }
-
-        def to_num(v):
-            if v is None:
-                return None
-            if isinstance(v, str):
-                v = v.replace(",", "").replace("%", "").strip()
-                if v == "":
-                    return None
-            try:
-                return float(v)
-            except Exception:
-                return None
-
-        df = df.copy()
-
-        main_col = "主力净流入-净额"
-        super_col = "超大单净流入-净额"
-        big_col = "大单净流入-净额"
-        medium_col = "中单净流入-净额"
-        small_col = "小单净流入-净额"
-
-        if main_col not in df.columns:
-            return {
-                "available": False,
-                "error": "资金流字段缺失"
-            }
-
-        for col in [main_col, super_col, big_col, medium_col, small_col]:
-            if col in df.columns:
-                df[col] = df[col].apply(to_num)
-
-        if len(df) == 0:
-            return {
-                "available": False,
-                "error": "资金流数据为空"
-            }
-
-        row = df.iloc[-1]
-        if row is None:
-            return {
-                "available": False,
-                "error": "资金流最新行为空"
-            }
-
-        main_3d = df[main_col].tail(3).sum() if main_col in df.columns else None
-        main_5d = df[main_col].tail(5).sum() if main_col in df.columns else None
-
-        latest_main = to_num(row.get(main_col))
-
-        if latest_main is None:
-            trend_label = "未知"
-        elif latest_main > 0 and (main_5d is not None and main_5d > 0):
-            trend_label = "资金偏多"
-        elif latest_main < 0 and (main_5d is not None and main_5d < 0):
-            trend_label = "资金偏空"
-        else:
-            trend_label = "资金分化"
-
-        return {
-            "available": True,
-            "main_inflow": latest_main,
-            "super_inflow": to_num(row.get(super_col)) if super_col in df.columns else None,
-            "big_inflow": to_num(row.get(big_col)) if big_col in df.columns else None,
-            "medium_inflow": to_num(row.get(medium_col)) if medium_col in df.columns else None,
-            "small_inflow": to_num(row.get(small_col)) if small_col in df.columns else None,
-            "main_inflow_3d": to_num(main_3d),
-            "main_inflow_5d": to_num(main_5d),
-            "trend_label": trend_label,
-            "raw_date": row.get("日期") or row.get("trade_date"),
-            "error": None,
-        }
-
-    except Exception as e:
-        msg = safe_text(e)
-        if "NoneType" in msg:
-            msg = "资金流接口当前无数据"
-        return {
-            "available": False,
-            "error": msg
-        }
-
-def _safe_to_float(v):
-    try:
-        if v is None:
-            return None
-        if isinstance(v, str):
-            v = v.replace(",", "").replace("%", "").strip()
-            if v == "":
-                return None
-        return float(v)
-    except Exception:
-        return None
-
-
-def get_stock_sector(symbol: str):
-    cache_dir = os.path.join(os.path.dirname(__file__), "cache")
-    cache_file = os.path.join(cache_dir, "sector_cons.csv")
-
-    # source 1: AKShare industry constituents
-    try:
-        import akshare as ak
-
-        # 行业列表
-        board_df = ak.stock_board_industry_name_em()
-        if board_df is not None and not board_df.empty:
-            os.makedirs(cache_dir, exist_ok=True)
-
-            all_rows = []
-            for _, row in board_df.iterrows():
-                board_name = row.get("板块名称")
-                if not board_name:
-                    continue
-                try:
-                    cons = ak.stock_board_industry_cons_em(symbol=board_name)
-                    if cons is not None and not cons.empty:
-                        cons = cons.copy()
-                        cons["所属板块"] = board_name
-                        all_rows.append(cons)
-                except Exception:
-                    continue
-
-            if all_rows:
-                cons_df = pd.concat(all_rows, ignore_index=True)
-                cons_df.to_csv(cache_file, index=False)
-
-                code_cols = [c for c in ["代码", "证券代码", "股票代码"] if c in cons_df.columns]
-                name_cols = [c for c in ["名称", "股票名称"] if c in cons_df.columns]
-
-                if code_cols:
-                    code_col = code_cols[0]
-                    cons_df[code_col] = cons_df[code_col].astype(str).str.zfill(6)
-                    hit = cons_df[cons_df[code_col] == str(symbol).zfill(6)]
-                    if not hit.empty:
-                        return {
-                            "available": True,
-                            "sector_name": hit.iloc[0].get("所属板块"),
-                            "stock_name": hit.iloc[0].get(name_cols[0]) if name_cols else None,
-                            "error": None,
-                        }
-    except Exception:
-        pass
-
-    # source 2: cache
-    if os.path.exists(cache_file):
-        try:
-            cons_df = pd.read_csv(cache_file)
-            code_cols = [c for c in ["代码", "证券代码", "股票代码"] if c in cons_df.columns]
-            name_cols = [c for c in ["名称", "股票名称"] if c in cons_df.columns]
-            if code_cols:
-                code_col = code_cols[0]
-                cons_df[code_col] = cons_df[code_col].astype(str).str.zfill(6)
-                hit = cons_df[cons_df[code_col] == str(symbol).zfill(6)]
-                if not hit.empty:
-                    return {
-                        "available": True,
-                        "sector_name": hit.iloc[0].get("所属板块"),
-                        "stock_name": hit.iloc[0].get(name_cols[0]) if name_cols else None,
-                        "error": None,
-                    }
-        except Exception as e:
-            return {"available": False, "error": safe_text(e)}
-
-    return {"available": False, "error": "未获取到所属板块"}
-
-
-def get_sector_strength(symbol: str):
-    cache_dir = os.path.join(os.path.dirname(__file__), "cache")
-    sector_info = get_stock_sector(symbol)
-
-    if not sector_info.get("available"):
-        return {
-            "available": False,
-            "sector_name": None,
-            "pct_chg_day": None,
-            "pct_chg_5d": None,
-            "score": 0,
-            "label": "未知",
-            "error": sector_info.get("error"),
-        }
-
-    sector_name = sector_info.get("sector_name")
-    cache_file = os.path.join(cache_dir, f"sector_{sector_name}.csv")
-
-    def score_from_changes(day_chg, chg_5d):
-        score = 0
-        if day_chg is not None:
-            if day_chg >= 2:
-                score += 4
-            elif day_chg >= 0.8:
-                score += 2
-            elif day_chg <= -2:
-                score -= 4
-            elif day_chg <= -0.8:
-                score -= 2
-
-        if chg_5d is not None:
-            if chg_5d >= 5:
-                score += 4
-            elif chg_5d >= 2:
-                score += 2
-            elif chg_5d <= -5:
-                score -= 4
-            elif chg_5d <= -2:
-                score -= 2
-
-        score = max(-10, min(10, score))
-        if score >= 6:
-            label = "强势"
-        elif score >= 2:
-            label = "偏强"
-        elif score <= -6:
-            label = "弱势"
-        elif score <= -2:
-            label = "偏弱"
-        else:
-            label = "中性"
-        return score, label
-
-    # source 1: AKShare board history
-    try:
-        import akshare as ak
-
-        hist = ak.stock_board_industry_hist_em(symbol=sector_name, adjust="")
-        if hist is not None and not hist.empty:
-            hist = hist.copy()
-            hist = hist.rename(columns={
-                "日期": "date",
-                "开盘": "open",
-                "收盘": "close",
-                "最高": "high",
-                "最低": "low",
-                "涨跌幅": "pct_chg",
-            })
-
-            if "date" in hist.columns:
-                hist["trade_date"] = pd.to_datetime(hist["date"]).dt.strftime("%Y%m%d")
-
-            if "close" in hist.columns:
-                hist["close"] = pd.to_numeric(hist["close"], errors="coerce")
-            if "pct_chg" in hist.columns:
-                hist["pct_chg"] = pd.to_numeric(hist["pct_chg"], errors="coerce")
-
-            hist = hist.sort_values("trade_date").reset_index(drop=True)
-
-            if "close" in hist.columns and len(hist) >= 6:
-                last_close = hist["close"].iloc[-1]
-                prev_5_close = hist["close"].iloc[-6]
-                chg_5d = ((last_close / prev_5_close) - 1) * 100 if pd.notna(last_close) and pd.notna(prev_5_close) and prev_5_close != 0 else None
-            else:
-                chg_5d = None
-
-            pct_chg_day = _safe_to_float(hist["pct_chg"].iloc[-1]) if "pct_chg" in hist.columns and len(hist) > 0 else None
-
-            os.makedirs(cache_dir, exist_ok=True)
-            hist.to_csv(cache_file, index=False)
-
-            score, label = score_from_changes(pct_chg_day, chg_5d)
-
-            return {
-                "available": True,
-                "sector_name": sector_name,
-                "pct_chg_day": round_or_none(pct_chg_day),
-                "pct_chg_5d": round_or_none(chg_5d),
-                "score": score,
-                "label": label,
-                "error": None,
-            }
-    except Exception:
-        pass
-
-    # source 2: cache
-    if os.path.exists(cache_file):
-        try:
-            hist = pd.read_csv(cache_file)
-            hist = hist.sort_values("trade_date").reset_index(drop=True)
-
-            if "close" in hist.columns:
-                hist["close"] = pd.to_numeric(hist["close"], errors="coerce")
-            if "pct_chg" in hist.columns:
-                hist["pct_chg"] = pd.to_numeric(hist["pct_chg"], errors="coerce")
-
-            if len(hist) >= 6:
-                last_close = hist["close"].iloc[-1]
-                prev_5_close = hist["close"].iloc[-6]
-                chg_5d = ((last_close / prev_5_close) - 1) * 100 if pd.notna(last_close) and pd.notna(prev_5_close) and prev_5_close != 0 else None
-            else:
-                chg_5d = None
-
-            pct_chg_day = _safe_to_float(hist["pct_chg"].iloc[-1]) if "pct_chg" in hist.columns and len(hist) > 0 else None
-            score, label = score_from_changes(pct_chg_day, chg_5d)
-
-            return {
-                "available": True,
-                "sector_name": sector_name,
-                "pct_chg_day": round_or_none(pct_chg_day),
-                "pct_chg_5d": round_or_none(chg_5d),
-                "score": score,
-                "label": label,
-                "error": None,
-            }
-        except Exception as e:
-            return {
-                "available": False,
-                "sector_name": sector_name,
-                "pct_chg_day": None,
-                "pct_chg_5d": None,
-                "score": 0,
-                "label": "未知",
-                "error": safe_text(e),
-            }
-
-    return {
-        "available": False,
-        "sector_name": sector_name,
-        "pct_chg_day": None,
-        "pct_chg_5d": None,
-        "score": 0,
-        "label": "未知",
-        "error": "板块历史暂不可用",
-    }
-
-
 
 
 @app.get("/leaders")
@@ -2990,3 +1752,169 @@ def get_market_sentiment_source2_index_only():
             "available": False,
             "error": safe_text(e),
         }
+
+
+def get_market_sentiment_quick():
+    cached = get_cached_market_sentiment()
+    if cached is not None:
+        return cached
+
+    return {
+        "available": False,
+        "score": 0,
+        "label": "中性",
+        "components": {},
+        "stats": {},
+        "error": "已跳过实时市场情绪以提升响应速度",
+        "source": "fallback",
+    }
+
+
+def run_with_timeout(fn, timeout_seconds, default=None):
+    ex = ThreadPoolExecutor(max_workers=1)
+    fut = ex.submit(fn)
+    try:
+        return fut.result(timeout=timeout_seconds)
+    except FuturesTimeoutError:
+        fut.cancel()
+        ex.shutdown(wait=False, cancel_futures=True)
+        return default
+    except Exception as e:
+        print("run_with_timeout error:", e)
+        ex.shutdown(wait=False, cancel_futures=True)
+        return default
+    finally:
+        try:
+            ex.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
+
+def result_available(x):
+    return isinstance(x, dict) and bool(x.get("available"))
+
+
+def try_sources_with_timeout(source_specs, fallback_result):
+    errors = []
+
+    for source_name, timeout_seconds, fn in source_specs:
+        result = run_with_timeout(fn, timeout_seconds, default=None)
+
+        if result_available(result):
+            out = dict(result)
+            out["source"] = source_name
+            return out
+
+        if isinstance(result, dict):
+            msg = result.get("error")
+            errors.append(f"{source_name}: {msg or 'unavailable'}")
+        else:
+            errors.append(f"{source_name}: timeout_or_exception")
+
+    out = dict(fallback_result)
+    out["source"] = "fallback"
+    out["error"] = " | ".join(errors) if errors else out.get("error")
+    return out
+
+
+def calc_trading_decision(signal: dict, relative_strength: dict, market_sentiment: dict, status_judgement: dict, capital_flow: dict):
+    try:
+        score = 0.0
+        reasons = []
+
+        signal_score = (signal or {}).get("score") or 0
+        rs_score = (relative_strength or {}).get("score") or 0
+        ms_score = (market_sentiment or {}).get("score") or 0
+
+        score += signal_score * 0.4
+        score += rs_score * 1.2
+        score += ms_score * 0.6
+
+        if signal_score >= 20:
+            reasons.append("均线多头排列")
+        if (signal or {}).get("indicators", {}).get("macd_hist") is not None:
+            if (signal or {}).get("indicators", {}).get("macd_hist") > 0:
+                reasons.append("MACD偏强")
+        if status_judgement and status_judgement.get("label"):
+            reasons.append(f'状态判断：{status_judgement.get("label")}')
+
+        if capital_flow and capital_flow.get("available"):
+            main_flow = capital_flow.get("main_inflow")
+            try:
+                if main_flow is not None and float(main_flow) > 0:
+                    score += 1.5
+                    reasons.append("资金偏正")
+            except Exception:
+                pass
+
+        if score >= 16:
+            action = "顺势做多"
+            bias = "偏多"
+            confidence = 78
+            summary = "趋势与信号共振较强。"
+        elif score >= 10:
+            action = "轻仓试多"
+            bias = "谨慎偏多"
+            confidence = 66
+            summary = "存在修复迹象，但中期趋势尚未完全扭转。"
+        elif score <= -10:
+            action = "观望回避"
+            bias = "偏空"
+            confidence = 72
+            summary = "信号与环境偏弱，暂不宜贸然参与。"
+        else:
+            action = "以观察为主"
+            bias = "中性"
+            confidence = 55
+            summary = "信号分歧较大，等待更多确认。"
+
+        return {
+            "action": action,
+            "bias": bias,
+            "confidence": confidence,
+            "horizon": "短线到波段",
+            "execution_hint": "控制仓位，结合均线与放量确认后执行。",
+            "summary": summary,
+            "reasons": reasons,
+            "composite_score": round(score, 1),
+        }
+    except Exception as e:
+        return {
+            "action": "以观察为主",
+            "bias": "中性",
+            "confidence": 50,
+            "horizon": "短线到波段",
+            "execution_hint": "数据异常，先观察。",
+            "summary": "交易决策计算失败，暂使用保守默认值。",
+            "reasons": [],
+            "composite_score": 0.0,
+            "error": safe_text(e),
+        }
+
+
+def get_index_snapshot_multi():
+    try:
+        df = ak.stock_zh_index_spot_em()
+        if df is None or df.empty:
+            return pd.DataFrame()
+
+        work = df.copy()
+
+        # 统一字段，兼容 pick_index_row / 情绪函数
+        if "代码" in work.columns:
+            work["代码"] = work["代码"].astype(str)
+        if "名称" in work.columns:
+            work["名称"] = work["名称"].astype(str)
+
+        if "最新价" not in work.columns and "最新" in work.columns:
+            work["最新价"] = work["最新"]
+        if "涨跌幅" not in work.columns and "涨跌幅(%)" in work.columns:
+            work["涨跌幅"] = work["涨跌幅(%)"]
+
+        # 给 quick sentiment 用的统一字段
+        if "pct_chg" not in work.columns and "涨跌幅" in work.columns:
+            work["pct_chg"] = pd.to_numeric(work["涨跌幅"], errors="coerce")
+
+        return work
+    except Exception as e:
+        print("get_index_snapshot_multi error:", e)
+        return pd.DataFrame()
