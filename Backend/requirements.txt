@@ -69,3 +69,4 @@ fastapi[standard]
 pandas
 tushare
 akshare
+pypinyin

@@ -142,8 +142,14 @@ type TradingDecisionData = {
 };
 
 
+type WatchlistItem = {
+  key: string;
+  label: string;
+  count: number;
+};
+
 type WatchlistsResponse = {
-  watchlists: string[];
+  watchlists: WatchlistItem[];
   count: number;
   error?: string | null;
 };
@@ -413,7 +419,7 @@ export default function HomePage() {
   const [suggestions, setSuggestions] = useState<SearchItem[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const [watchlists, setWatchlists] = useState<string[]>([]);
+  const [watchlists, setWatchlists] = useState<WatchlistItem[]>([]);
   const [selectedWatchlist, setSelectedWatchlist] = useState<string>("core");
   const [leaders, setLeaders] = useState<LeaderItem[]>([]);
   const [leaderSortBy, setLeaderSortBy] = useState<"rs_20" | "rs_10" | "rs_5">("rs_20");
@@ -450,10 +456,10 @@ const [stockSearchLoading, setStockSearchLoading] = useState(false);
         const items = json.watchlists || [];
         setWatchlists(items);
 
-        if (items.includes("core")) {
+        if (items.some((x) => x.key === "core")) {
           setSelectedWatchlist("core");
         } else if (items.length > 0) {
-          setSelectedWatchlist(items[0]);
+          setSelectedWatchlist(items[0].key);
         }
       } catch {
         if (!cancelled) {
@@ -894,8 +900,8 @@ function removeFavorite(s: string) {
                     style={{ width: "78px", maxWidth: "78px" }}
                   >
 {watchlists.map((w) => (
-                      <option key={w} value={w}>
-                        {WATCHLIST_LABELS[w] || w}
+                      <option key={w.key} value={w.key}>
+                        {w.label}
                       </option>
                     ))}
                   </select>

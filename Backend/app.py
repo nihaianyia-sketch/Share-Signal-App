@@ -165,10 +165,29 @@ class WatchlistRemoveRequest(BaseModel):
     symbol: str
 
 
+class WatchlistCreateRequest(BaseModel):
+    key: str
+    label: str
+
+
+class WatchlistRenameRequest(BaseModel):
+    key: str
+    label: str
+
+
 DEFAULT_WATCHLISTS = {
-    "core": ["600519", "300870", "002851"],
-    "ai_power": ["300870", "002851", "300750", "002594"],
-    "cpo": ["300308", "688256"],
+    "core": {
+        "label": "核心观察",
+        "symbols": ["600519", "300870", "002851"],
+    },
+    "ai_power": {
+        "label": "AI电源",
+        "symbols": ["300870", "002851", "300750", "002594"],
+    },
+    "cpo": {
+        "label": "CPO光模块",
+        "symbols": ["300308", "688256"],
+    },
 }
 
 WATCHLISTS_FILE = os.getenv(
@@ -201,33 +220,66 @@ def load_watchlists():
 
     _ensure_watchlists_dir()
 
-    if os.path.exists(WATCHLISTS_FILE):
-        try:
-            with open(WATCHLISTS_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
+    if not os.path.exists(WATCHLISTS_FILE):
+        WATCHLISTS = {
+            k: {
+                "label": v["label"],
+                "symbols": list(v["symbols"]),
+            }
+            for k, v in DEFAULT_WATCHLISTS.items()
+        }
+        save_watchlists()
+        return WATCHLISTS
 
-            if isinstance(data, dict):
-                clean = {}
-                for k, v in data.items():
-                    if not isinstance(k, str) or not isinstance(v, list):
-                        continue
-                    clean[k] = []
-                    for x in v:
-                        s = str(x).strip().upper()
-                        if "." in s:
-                            s = s.split(".")[0]
-                        if s.isdigit() and len(s) == 6 and s not in clean[k]:
-                            clean[k].append(s)
+    try:
+        with open(WATCHLISTS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        WATCHLISTS = {
+            k: {
+                "label": v["label"],
+                "symbols": list(v["symbols"]),
+            }
+            for k, v in DEFAULT_WATCHLISTS.items()
+        }
+        save_watchlists()
+        return WATCHLISTS
 
-                WATCHLISTS = clean if clean else {k: list(v) for k, v in DEFAULT_WATCHLISTS.items()}
-                return WATCHLISTS
-        except Exception:
-            pass
+    normalized = {}
 
-    WATCHLISTS = {k: list(v) for k, v in DEFAULT_WATCHLISTS.items()}
-    save_watchlists()
+    if isinstance(data, dict):
+        for key, val in data.items():
+            if isinstance(val, list):
+                normalized[key] = {
+                    "label": key,
+                    "symbols": [
+                        str(x).split(".")[0]
+                        for x in val
+                        if str(x).split(".")[0].isdigit() and len(str(x).split(".")[0]) == 6
+                    ],
+                }
+            elif isinstance(val, dict):
+                symbols = val.get("symbols", [])
+                normalized[key] = {
+                    "label": val.get("label", key),
+                    "symbols": [
+                        str(x).split(".")[0]
+                        for x in symbols
+                        if str(x).split(".")[0].isdigit() and len(str(x).split(".")[0]) == 6
+                    ],
+                }
+
+    if not normalized:
+        normalized = {
+            k: {
+                "label": v["label"],
+                "symbols": list(v["symbols"]),
+            }
+            for k, v in DEFAULT_WATCHLISTS.items()
+        }
+
+    WATCHLISTS = normalized
     return WATCHLISTS
-
 
 
 WATCHLISTS = {}
@@ -2359,9 +2411,26 @@ def get_leaders(
 @app.get("/watchlists")
 def get_watchlists():
     try:
+        out = []
+        for key, val in WATCHLISTS.items():
+            if isinstance(val, dict):
+                out.append({
+                    "key": key,
+                    "label": val.get("label", key),
+                    "count": len(val.get("symbols", [])),
+                })
+            else:
+                out.append({
+                    "key": key,
+                    "label": key,
+                    "count": len(val) if isinstance(val, list) else 0,
+                })
+
+        out.sort(key=lambda x: x["key"])
+
         return {
-            "watchlists": sorted(list(WATCHLISTS.keys())),
-            "count": len(WATCHLISTS),
+            "watchlists": out,
+            "count": len(out),
             "error": None,
         }
     except Exception as e:
@@ -2370,7 +2439,6 @@ def get_watchlists():
             "count": 0,
             "error": safe_text(e),
         }
-
 
 
 @app.post("/watchlists/add")
@@ -2392,19 +2460,26 @@ def add_to_watchlist(payload: WatchlistAddRequest):
             return {"ok": False, "error": "股票代码需为6位数字"}
 
         if watchlist not in WATCHLISTS:
-            WATCHLISTS[watchlist] = []
+            WATCHLISTS[watchlist] = {
+                "label": watchlist,
+                "symbols": [],
+            }
 
-        if symbol not in WATCHLISTS[watchlist]:
-            WATCHLISTS[watchlist].append(symbol)
+        if isinstance(WATCHLISTS[watchlist], list):
+            WATCHLISTS[watchlist] = {
+                "label": watchlist,
+                "symbols": WATCHLISTS[watchlist],
+            }
+
+        if symbol not in WATCHLISTS[watchlist]["symbols"]:
+            WATCHLISTS[watchlist]["symbols"].append(symbol)
 
         save_watchlists()
 
         return {
             "ok": True,
             "watchlist": watchlist,
-            "symbols": WATCHLISTS[watchlist],
-            
-            
+            "symbols": WATCHLISTS[watchlist]["symbols"],
             "error": None,
         }
 
@@ -2478,6 +2553,74 @@ def remove_from_watchlist(payload: WatchlistRemoveRequest):
             "ok": True,
             "watchlist": watchlist,
             "symbols": WATCHLISTS[watchlist]["symbols"],
+            "error": None,
+        }
+    except Exception as e:
+        return {"ok": False, "error": safe_text(e)}
+
+
+@app.post("/watchlists/create")
+def create_watchlist(payload: WatchlistCreateRequest):
+    try:
+        key = (payload.key or "").strip().lower()
+        label = (payload.label or "").strip()
+
+        if not key:
+            return {"ok": False, "error": "观察池 key 不能为空"}
+
+        if not label:
+            return {"ok": False, "error": "观察池标签不能为空"}
+
+        if key in WATCHLISTS:
+            return {"ok": False, "error": "观察池已存在"}
+
+        WATCHLISTS[key] = {
+            "label": label,
+            "symbols": [],
+        }
+        save_watchlists()
+
+        return {
+            "ok": True,
+            "watchlist": {
+                "key": key,
+                "label": WATCHLISTS[key]["label"],
+                "count": len(WATCHLISTS[key]["symbols"]),
+            },
+            "error": None,
+        }
+    except Exception as e:
+        return {"ok": False, "error": safe_text(e)}
+
+
+@app.post("/watchlists/rename")
+def rename_watchlist(payload: WatchlistRenameRequest):
+    try:
+        key = (payload.key or "").strip().lower()
+        label = (payload.label or "").strip()
+
+        if not key or key not in WATCHLISTS:
+            return {"ok": False, "error": "观察池不存在"}
+
+        if not label:
+            return {"ok": False, "error": "标签不能为空"}
+
+        if isinstance(WATCHLISTS[key], list):
+            WATCHLISTS[key] = {
+                "label": key,
+                "symbols": WATCHLISTS[key],
+            }
+
+        WATCHLISTS[key]["label"] = label
+        save_watchlists()
+
+        return {
+            "ok": True,
+            "watchlist": {
+                "key": key,
+                "label": WATCHLISTS[key]["label"],
+                "count": len(WATCHLISTS[key]["symbols"]),
+            },
             "error": None,
         }
     except Exception as e:
