@@ -808,9 +808,15 @@ BACKGROUND_REFRESH_THREAD_STARTED = False
 
 def get_index_snapshot_cached():
     global INDEX_SNAPSHOT_CACHE
-    if INDEX_SNAPSHOT_CACHE is None:
-        return pd.DataFrame()
-    return INDEX_SNAPSHOT_CACHE.copy()
+    if INDEX_SNAPSHOT_CACHE is not None and not INDEX_SNAPSHOT_CACHE.empty:
+        return INDEX_SNAPSHOT_CACHE.copy()
+
+    disk_idx = load_index_snapshot_cache_from_disk()
+    if disk_idx is not None and not disk_idx.empty:
+        INDEX_SNAPSHOT_CACHE = disk_idx.copy()
+        return disk_idx.copy()
+
+    return pd.DataFrame()
 
 
 def compute_market_mood_from_snapshot(idx_spot_df: pd.DataFrame):
@@ -903,9 +909,14 @@ def refresh_background_caches_once():
 
     try:
         idx = get_index_snapshot_multi()
+
+        if idx is None or idx.empty:
+            idx = get_index_snapshot_fallback_from_tushare()
+
         if idx is not None and not idx.empty:
             INDEX_SNAPSHOT_CACHE = idx.copy()
             INDEX_SNAPSHOT_CACHE_TS = time.time()
+            save_index_snapshot_cache_to_disk(idx)
 
             mood = compute_market_mood_from_snapshot(idx)
 
@@ -921,9 +932,50 @@ def refresh_background_caches_once():
 
             MARKET_SENTIMENT_CACHE = quick_sentiment
             MARKET_SENTIMENT_CACHE_TS = time.time()
+            save_market_sentiment_cache_to_disk(quick_sentiment)
             print("background cache refreshed")
+            return
+
+        disk_idx = load_index_snapshot_cache_from_disk()
+        if disk_idx is not None and not disk_idx.empty:
+            INDEX_SNAPSHOT_CACHE = disk_idx.copy()
+            INDEX_SNAPSHOT_CACHE_TS = time.time()
+
+            disk_sent = load_market_sentiment_cache_from_disk()
+            if isinstance(disk_sent, dict):
+                MARKET_SENTIMENT_CACHE = dict(disk_sent)
+                MARKET_SENTIMENT_CACHE_TS = time.time()
+            else:
+                mood = compute_market_mood_from_snapshot(disk_idx)
+                MARKET_SENTIMENT_CACHE = {
+                    "available": True,
+                    "score": mood.get("score", 0),
+                    "label": mood.get("label", "中性"),
+                    "components": {"index_only": mood.get("score", 0)},
+                    "stats": {"indices": mood.get("indices", [])},
+                    "error": "使用磁盘缓存",
+                    "source": "disk_cache",
+                }
+                MARKET_SENTIMENT_CACHE_TS = time.time()
+
+            print("background cache restored from disk")
+            return
+
+        print("background cache refresh skipped: no data")
     except Exception as e:
         print("background cache refresh error:", e)
+
+        disk_idx = load_index_snapshot_cache_from_disk()
+        if disk_idx is not None and not disk_idx.empty:
+            INDEX_SNAPSHOT_CACHE = disk_idx.copy()
+            INDEX_SNAPSHOT_CACHE_TS = time.time()
+
+            disk_sent = load_market_sentiment_cache_from_disk()
+            if isinstance(disk_sent, dict):
+                MARKET_SENTIMENT_CACHE = dict(disk_sent)
+                MARKET_SENTIMENT_CACHE_TS = time.time()
+
+            print("background cache restored from disk after error")
 
 
 def background_refresh_loop():
@@ -941,6 +993,63 @@ def start_background_refresh_thread():
     th = threading.Thread(target=background_refresh_loop, daemon=True)
     th.start()
     print("background refresh thread started")
+
+
+
+INDEX_SNAPSHOT_CACHE_FILE = os.path.join(os.path.dirname(__file__), "cache", "index_snapshot_cache.json")
+MARKET_SENTIMENT_CACHE_FILE = os.path.join(os.path.dirname(__file__), "cache", "market_sentiment_cache.json")
+
+
+def save_index_snapshot_cache_to_disk(df: pd.DataFrame):
+    try:
+        os.makedirs(os.path.dirname(INDEX_SNAPSHOT_CACHE_FILE), exist_ok=True)
+        if df is None or df.empty:
+            return
+        df.to_json(INDEX_SNAPSHOT_CACHE_FILE, orient="records", force_ascii=False)
+    except Exception as e:
+        print("save_index_snapshot_cache_to_disk error:", e)
+
+
+def load_index_snapshot_cache_from_disk():
+    try:
+        if not os.path.exists(INDEX_SNAPSHOT_CACHE_FILE):
+            return pd.DataFrame()
+
+        df = pd.read_json(INDEX_SNAPSHOT_CACHE_FILE, dtype=False)
+        if df is None or df.empty:
+            return pd.DataFrame()
+
+        if "代码" in df.columns:
+            df["代码"] = df["代码"].astype(str).str.zfill(6)
+        if "原始代码" in df.columns:
+            df["原始代码"] = df["原始代码"].astype(str).str.zfill(6)
+        if "名称" in df.columns:
+            df["名称"] = df["名称"].astype(str)
+
+        return df
+    except Exception as e:
+        print("load_index_snapshot_cache_from_disk error:", e)
+        return pd.DataFrame()
+
+
+def save_market_sentiment_cache_to_disk(obj: dict):
+    try:
+        os.makedirs(os.path.dirname(MARKET_SENTIMENT_CACHE_FILE), exist_ok=True)
+        with open(MARKET_SENTIMENT_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(obj, f, ensure_ascii=False)
+    except Exception as e:
+        print("save_market_sentiment_cache_to_disk error:", e)
+
+
+def load_market_sentiment_cache_from_disk():
+    try:
+        if not os.path.exists(MARKET_SENTIMENT_CACHE_FILE):
+            return None
+        with open(MARKET_SENTIMENT_CACHE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print("load_market_sentiment_cache_from_disk error:", e)
+        return None
 
 @app.get("/")
 def root():
@@ -1007,6 +1116,27 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
             "available": False,
             "error": "指数气氛暂不可用",
         }
+
+        idx_spot_df = get_index_snapshot_cached()
+        if idx_spot_df is not None and not idx_spot_df.empty:
+            row = pick_index_row(idx_spot_df, benchmark_info["ts_code"])
+            if row is not None:
+                pct = row.get("pct_chg")
+                if pct is None:
+                    pct = row.get("涨跌幅")
+                close = row.get("最新价")
+
+                benchmark = {
+                    "name": benchmark_info["name"],
+                    "ts_code": benchmark_info["ts_code"],
+                    "trade_date": None,
+                    "close": round_or_none(close),
+                    "pct_chg": round_or_none(pct),
+                    "available": True,
+                    "error": None,
+                }
+
+            market_mood = compute_market_mood_from_snapshot(idx_spot_df)
 
         try:
             idx_spot_df = None
@@ -1710,11 +1840,23 @@ def get_market_sentiment_source3_news():
 
 def get_cached_market_sentiment():
     global MARKET_SENTIMENT_CACHE, MARKET_SENTIMENT_CACHE_TS
+
     now = time.time()
     if MARKET_SENTIMENT_CACHE is not None and now - MARKET_SENTIMENT_CACHE_TS <= MARKET_SENTIMENT_TTL_SECONDS:
         out = dict(MARKET_SENTIMENT_CACHE)
         out["from_cache"] = True
         return out
+
+    disk_obj = load_market_sentiment_cache_from_disk()
+    if isinstance(disk_obj, dict):
+        MARKET_SENTIMENT_CACHE = dict(disk_obj)
+        MARKET_SENTIMENT_CACHE_TS = now
+        out = dict(disk_obj)
+        out["from_cache"] = True
+        if "source" not in out:
+            out["source"] = "disk_cache"
+        return out
+
     return None
 
 
@@ -1946,3 +2088,130 @@ def get_index_snapshot_multi():
     except Exception as e:
         print("get_index_snapshot_multi error:", e)
         return pd.DataFrame()
+
+
+def get_index_snapshot_fallback_from_tushare():
+    if not TOKEN:
+        return pd.DataFrame()
+
+    try:
+        pro_local = ts.pro_api(TOKEN)
+        targets = [
+            ("上证综指", "000001.SH"),
+            ("深证成指", "399001.SZ"),
+            ("创业板指", "399006.SZ"),
+            ("科创50", "000688.SH"),
+        ]
+
+        rows = []
+        for name, ts_code in targets:
+            df = pro_local.index_daily(ts_code=ts_code, limit=1)
+            if df is None or df.empty:
+                continue
+
+            row = df.iloc[0]
+            rows.append({
+                "代码": ts_code.split(".")[0],
+                "原始代码": ts_code.split(".")[0],
+                "名称": name,
+                "最新价": row.get("close"),
+                "涨跌幅": row.get("pct_chg"),
+                "pct_chg": row.get("pct_chg"),
+                "trade_date": row.get("trade_date"),
+            })
+
+        if not rows:
+            return pd.DataFrame()
+
+        return pd.DataFrame(rows)
+    except Exception as e:
+        print("get_index_snapshot_fallback_from_tushare error:", e)
+        return pd.DataFrame()
+
+
+@app.get("/market/overview")
+def get_market_overview():
+    try:
+        idx_spot_df = get_index_snapshot_cached()
+
+        benchmark_items = []
+        if idx_spot_df is not None and not idx_spot_df.empty:
+            targets = [
+                ("上证综指", "000001.SH"),
+                ("深证成指", "399001.SZ"),
+                ("创业板指", "399006.SZ"),
+                ("科创50", "000688.SH"),
+            ]
+
+            for name, ts_code in targets:
+                row = pick_index_row(idx_spot_df, ts_code)
+                if row is None:
+                    continue
+
+                pct = row.get("pct_chg")
+                if pct is None:
+                    pct = row.get("涨跌幅")
+                close = row.get("最新价")
+
+                benchmark_items.append({
+                    "name": name,
+                    "ts_code": ts_code,
+                    "close": round_or_none(close),
+                    "pct_chg": round_or_none(pct),
+                })
+
+        market_mood = (
+            compute_market_mood_from_snapshot(idx_spot_df)
+            if idx_spot_df is not None and not idx_spot_df.empty
+            else {
+                "score": 0,
+                "label": "中性",
+                "indices": [],
+                "available": False,
+                "error": "市场温度缓存暂不可用",
+            }
+        )
+
+        market_sentiment = get_cached_market_sentiment()
+        if market_sentiment is None:
+            market_sentiment = {
+                "available": False,
+                "score": 0,
+                "label": "中性",
+                "components": {},
+                "stats": {},
+                "error": "市场情绪缓存暂不可用",
+                "source": "fallback",
+            }
+
+        return {
+            "error": None,
+            "benchmarks": benchmark_items,
+            "benchmark_available": len(benchmark_items) > 0,
+            "market_mood": market_mood,
+            "market_sentiment": market_sentiment,
+            "cache_time": round_or_none(INDEX_SNAPSHOT_CACHE_TS, 3) if INDEX_SNAPSHOT_CACHE_TS else None,
+        }
+    except Exception as e:
+        return {
+            "error": safe_text(e),
+            "benchmarks": [],
+            "benchmark_available": False,
+            "market_mood": {
+                "score": 0,
+                "label": "中性",
+                "indices": [],
+                "available": False,
+                "error": "市场温度暂不可用",
+            },
+            "market_sentiment": {
+                "available": False,
+                "score": 0,
+                "label": "中性",
+                "components": {},
+                "stats": {},
+                "error": "市场情绪暂不可用",
+                "source": "fallback",
+            },
+            "cache_time": None,
+        }
