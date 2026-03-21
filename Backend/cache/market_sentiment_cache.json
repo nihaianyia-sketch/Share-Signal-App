@@ -1,0 +1,46 @@
+{
+  "available": true,
+  "score": -8,
+  "label": "偏冷",
+  "components": {
+    "index_only": -8
+  },
+  "stats": {
+    "indices": [
+      {
+        "name": "上证综指",
+        "ts_code": "000001.SH",
+        "trade_date": null,
+        "close": 3957.05,
+        "pct_chg": -1.24,
+        "mood_score": -4
+      },
+      {
+        "name": "深证成指",
+        "ts_code": "399001.SZ",
+        "trade_date": null,
+        "close": 13866.2,
+        "pct_chg": -0.25,
+        "mood_score": -2
+      },
+      {
+        "name": "创业板指",
+        "ts_code": "399006.SZ",
+        "trade_date": null,
+        "close": 3352.1,
+        "pct_chg": 1.3,
+        "mood_score": 4
+      },
+      {
+        "name": "科创50",
+        "ts_code": "000688.SH",
+        "trade_date": null,
+        "close": 1318.31,
+        "pct_chg": -1.55,
+        "mood_score": -4
+      }
+    ]
+  },
+  "error": "使用手动seed缓存",
+  "source": "disk_cache"
+}
