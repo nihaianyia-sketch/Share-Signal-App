@@ -997,7 +997,7 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
             "name": benchmark_info["name"],
             "ts_code": benchmark_info["ts_code"],
             "available": False,
-            "error": "基准缓存暂不可用",
+            "error": "对应大盘暂不可用",
         }
 
         market_mood = {
@@ -1005,10 +1005,14 @@ def get_history(symbol: str = Query(..., description="A股代码，如 600519 �
             "label": "中性",
             "indices": [],
             "available": False,
-            "error": "市场温度缓存暂不可用",
+            "error": "指数气氛暂不可用",
         }
 
-        idx_spot_df = get_index_snapshot_cached()
+        try:
+            idx_spot_df = get_ak_index_snapshot()
+        except Exception:
+            idx_spot_df = get_index_snapshot_cached()
+
         if idx_spot_df is not None and not idx_spot_df.empty:
             row = pick_index_row(idx_spot_df, benchmark_info["ts_code"])
             if row is not None:
@@ -1755,19 +1759,23 @@ def get_market_sentiment_source2_index_only():
 
 
 def get_market_sentiment_quick():
-    cached = get_cached_market_sentiment()
-    if cached is not None:
-        return cached
+    source_specs = [
+        ("index_quick_sentiment", 0.6, lambda: get_market_sentiment_source2_index_only()),
+        ("market_sentiment_cache", 0.05, lambda: get_cached_market_sentiment()),
+    ]
 
-    return {
-        "available": False,
-        "score": 0,
-        "label": "中性",
-        "components": {},
-        "stats": {},
-        "error": "已跳过实时市场情绪以提升响应速度",
-        "source": "fallback",
-    }
+    return try_sources_with_timeout(
+        source_specs,
+        {
+            "available": False,
+            "score": 0,
+            "label": "中性",
+            "components": {},
+            "stats": {},
+            "error": "市场情绪指数暂不可用",
+            "source": "fallback",
+        },
+    )
 
 
 def run_with_timeout(fn, timeout_seconds, default=None):
