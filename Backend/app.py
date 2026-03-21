@@ -211,6 +211,23 @@ def load_stock_index():
 
 
 
+
+def lookup_stock_name_from_index(symbol: str) -> str | None:
+    pure = (symbol or "").split(".")[0].strip().upper()
+    if not pure:
+        return None
+
+    try:
+        for item in load_stock_index():
+            s = str(item.get("symbol", "")).strip().upper()
+            if s == pure:
+                name = str(item.get("name", "")).strip()
+                return name or None
+    except Exception:
+        return None
+
+    return None
+
 def _ensure_watchlists_dir():
     os.makedirs(os.path.dirname(WATCHLISTS_FILE), exist_ok=True)
 
@@ -2645,7 +2662,11 @@ def get_watchlist_items(
 
         items = []
         for s in symbols:
-            name = fallback_stock_name(s) or s
+            name = (
+                lookup_stock_name_from_index(s)
+                or fallback_stock_name(s)
+                or s
+            )
             items.append({
                 "symbol": s,
                 "name": name,
