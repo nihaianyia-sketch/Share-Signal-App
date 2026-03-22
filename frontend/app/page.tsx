@@ -217,6 +217,7 @@ type CapitalFlow = {
   error?: string | null;
   source?: string | null;
   from_cache?: boolean | null;
+  source_note?: string | null;
 };
 
 type HistoryResponse = {
@@ -1360,6 +1361,70 @@ function removeFavorite(s: string) {
                           note="中线为0轴，便于对比资金方向与强弱"
                         />
                       </div>
+
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
+                        <IndicatorCard
+                          title="主力资金数值"
+                          value={
+                            capitalFlow.main_inflow !== null &&
+                            capitalFlow.main_inflow !== undefined
+                              ? capitalFlow.main_inflow
+                              : "--"
+                          }
+                          note={capitalFlow.source_note || capitalFlow.source || undefined}
+                        />
+                        <IndicatorCard
+                          title="3日累计"
+                          value={
+                            capitalFlow.main_inflow_3d !== null &&
+                            capitalFlow.main_inflow_3d !== undefined
+                              ? capitalFlow.main_inflow_3d
+                              : "--"
+                          }
+                        />
+                        <IndicatorCard
+                          title="5日累计"
+                          value={
+                            capitalFlow.main_inflow_5d !== null &&
+                            capitalFlow.main_inflow_5d !== undefined
+                              ? capitalFlow.main_inflow_5d
+                              : "--"
+                          }
+                        />
+                        <IndicatorCard
+                          title="超大单"
+                          value={
+                            capitalFlow.super_inflow !== null &&
+                            capitalFlow.super_inflow !== undefined
+                              ? capitalFlow.super_inflow
+                              : "--"
+                          }
+                        />
+                        <IndicatorCard
+                          title="大单"
+                          value={
+                            capitalFlow.big_inflow !== null &&
+                            capitalFlow.big_inflow !== undefined
+                              ? capitalFlow.big_inflow
+                              : "--"
+                          }
+                        />
+                        <IndicatorCard
+                          title="中单"
+                          value={
+                            capitalFlow.medium_inflow !== null &&
+                            capitalFlow.medium_inflow !== undefined
+                              ? capitalFlow.medium_inflow
+                              : "--"
+                          }
+                        />
+                      </div>
+
+                      {capitalFlow.source === "hsgt_market" || capitalFlow.source === "cache" ? (
+                        <div className="text-xs text-gray-500 mb-3">
+                          当前资金信号主要来自北向资金代理/缓存，通常只保证“主力资金数值”和资金方向标签可用。
+                        </div>
+                      ) : null}
 
                       <div className="mt-4">
                         <FlowBar title="主力资金" value={capitalFlow.main_inflow} />
