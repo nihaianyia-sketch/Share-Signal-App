@@ -2470,11 +2470,11 @@ def get_chart_daily_vs_120ma60(symbol: str = Query(..., description="A股代码�
         plot_day = plot_day.merge(ma60_daily, on="trade_date", how="left").sort_values("date")
 
         plt.figure(figsize=(12, 5))
-        plt.plot(plot_day["date"], plot_day["close"], label="日线收盘")
-        plt.plot(plot_day["date"], plot_day["MA60_120m"], label="120分钟 MA60")
+        plt.plot(plot_day["date"], plot_day["close"], label="Daily Close")
+        plt.plot(plot_day["date"], plot_day["MA60_120m"], label="120m MA60")
         plt.xticks(rotation=45)
         plt.legend()
-        plt.title(f"{symbol} 日线收盘 + 120分钟MA60")
+        plt.title(f"{symbol} Daily Close + 120m MA60")
 
         return {
             "error": None,
@@ -2499,12 +2499,12 @@ def get_chart_120m_ma(symbol: str = Query(..., description="A股代码，如 600
             df_120[f"MA{ma}"] = df_120["close"].rolling(ma).mean()
 
         plt.figure(figsize=(12, 5))
-        plt.plot(df_120["datetime"], df_120["close"], label="120分钟收盘")
+        plt.plot(df_120["datetime"], df_120["close"], label="120m Close")
         for ma in [5, 10, 30, 60, 120]:
             plt.plot(df_120["datetime"], df_120[f"MA{ma}"], label=f"MA{ma}")
         plt.xticks(rotation=45)
         plt.legend()
-        plt.title(f"{symbol} 120分钟线 + MA5/10/30/60/120")
+        plt.title(f"{symbol} 120m + MA5/10/30/60/120")
 
         return {
             "error": None,
