@@ -622,6 +622,8 @@ const [chart120mMa, setChart120mMa] = useState<ChartImageResponse | null>(null);
     setLoading(true);
     setError('');
     setData(null);
+    setChartDailyVs120(null);
+    setChart120mMa(null);
     setSymbol(finalSymbol);
     setShowSuggestions(false);
 
@@ -709,7 +711,7 @@ const [chart120mMa, setChart120mMa] = useState<ChartImageResponse | null>(null);
       setData(json);
 
       try {
-        const chart1Res = await fetch(`${API_BASE_URL}/chart/daily-vs-120ma60?symbol=${encodeURIComponent(s)}`, {
+        const chart1Res = await fetch(`${baseUrl}/chart/daily-vs-120ma60?symbol=${encodeURIComponent(finalSymbol)}`, {
           cache: "no-store",
         });
         const chart1Json: ChartImageResponse = await chart1Res.json();
@@ -719,7 +721,7 @@ const [chart120mMa, setChart120mMa] = useState<ChartImageResponse | null>(null);
       }
 
       try {
-        const chart2Res = await fetch(`${API_BASE_URL}/chart/120m-ma?symbol=${encodeURIComponent(s)}`, {
+        const chart2Res = await fetch(`${baseUrl}/chart/120m-ma?symbol=${encodeURIComponent(finalSymbol)}`, {
           cache: "no-store",
         });
         const chart2Json: ChartImageResponse = await chart2Res.json();
