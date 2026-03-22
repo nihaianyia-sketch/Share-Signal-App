@@ -1051,6 +1051,27 @@ def load_market_sentiment_cache_from_disk():
         print("load_market_sentiment_cache_from_disk error:", e)
         return None
 
+
+
+def preload_disk_caches_on_startup():
+    global INDEX_SNAPSHOT_CACHE, INDEX_SNAPSHOT_CACHE_TS
+    global MARKET_SENTIMENT_CACHE, MARKET_SENTIMENT_CACHE_TS
+
+    try:
+        idx = load_index_snapshot_cache_from_disk()
+        if idx is not None and not idx.empty:
+            INDEX_SNAPSHOT_CACHE = idx.copy()
+            INDEX_SNAPSHOT_CACHE_TS = time.time()
+            print("preloaded index snapshot cache from disk")
+
+        sent = load_market_sentiment_cache_from_disk()
+        if isinstance(sent, dict):
+            MARKET_SENTIMENT_CACHE = dict(sent)
+            MARKET_SENTIMENT_CACHE_TS = time.time()
+            print("preloaded market sentiment cache from disk")
+    except Exception as e:
+        print("preload_disk_caches_on_startup error:", e)
+
 @app.get("/")
 def root():
     return {"message": "a-share backend with stock name and index fallback"}
@@ -2215,3 +2236,9 @@ def get_market_overview():
             },
             "cache_time": None,
         }
+
+
+@app.on_event("startup")
+def _startup_background_refresh():
+    preload_disk_caches_on_startup()
+    start_background_refresh_thread()
