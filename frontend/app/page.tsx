@@ -204,6 +204,12 @@ type LeadersResponse = {
   error?: string | null;
 };
 
+type ChartImageResponse = {
+  error?: string | null;
+  symbol?: string;
+  image_base64?: string | null;
+};
+
 type CapitalFlow = {
   available?: boolean;
   main_inflow?: number;
@@ -451,6 +457,8 @@ const [renameWatchlistLabel, setRenameWatchlistLabel] = useState("");
 const [stockSearchQuery, setStockSearchQuery] = useState("");
 const [stockSearchResults, setStockSearchResults] = useState<StockSearchItem[]>([]);
 const [stockSearchLoading, setStockSearchLoading] = useState(false);
+const [chartDailyVs120, setChartDailyVs120] = useState<ChartImageResponse | null>(null);
+const [chart120mMa, setChart120mMa] = useState<ChartImageResponse | null>(null);
 
 
   const sortedLeaders = useMemo(() => {
@@ -699,6 +707,26 @@ const [stockSearchLoading, setStockSearchLoading] = useState(false);
       json.name = safeText(json.name);
 
       setData(json);
+
+      try {
+        const chart1Res = await fetch(`${API_BASE_URL}/chart/daily-vs-120ma60?symbol=${encodeURIComponent(s)}`, {
+          cache: "no-store",
+        });
+        const chart1Json: ChartImageResponse = await chart1Res.json();
+        setChartDailyVs120(chart1Json);
+      } catch {
+        setChartDailyVs120({ error: "日线 vs 120分钟MA60 图暂不可用", image_base64: null });
+      }
+
+      try {
+        const chart2Res = await fetch(`${API_BASE_URL}/chart/120m-ma?symbol=${encodeURIComponent(s)}`, {
+          cache: "no-store",
+        });
+        const chart2Json: ChartImageResponse = await chart2Res.json();
+        setChart120mMa(chart2Json);
+      } catch {
+        setChart120mMa({ error: "120分钟多均线图暂不可用", image_base64: null });
+      }
 
       setFavorites((prev) =>
         prev.map((item) =>
@@ -1471,6 +1499,40 @@ function removeFavorite(s: string) {
                   ) : (
                     <div className="text-sm text-gray-600">
                       {capitalFlow.error || "当前无可用资金流数据"}
+                    </div>
+                  )}
+                </section>
+              )}
+
+              {chartDailyVs120 && (
+                <section className="border border-gray-400 rounded p-4 mb-4 bg-white text-black">
+                  <h2 className="text-xl font-semibold mb-2">日线收盘 + 120分钟MA60</h2>
+                  {chartDailyVs120.image_base64 ? (
+                    <img
+                      src={`data:image/png;base64,${chartDailyVs120.image_base64}`}
+                      alt="日线收盘 + 120分钟MA60"
+                      className="w-full rounded border border-gray-200"
+                    />
+                  ) : (
+                    <div className="text-sm text-gray-600">
+                      {chartDailyVs120.error || "图表暂不可用"}
+                    </div>
+                  )}
+                </section>
+              )}
+
+              {chart120mMa && (
+                <section className="border border-gray-400 rounded p-4 mb-4 bg-white text-black">
+                  <h2 className="text-xl font-semibold mb-2">120分钟线 + MA5/10/30/60/120</h2>
+                  {chart120mMa.image_base64 ? (
+                    <img
+                      src={`data:image/png;base64,${chart120mMa.image_base64}`}
+                      alt="120分钟线 + MA5/10/30/60/120"
+                      className="w-full rounded border border-gray-200"
+                    />
+                  ) : (
+                    <div className="text-sm text-gray-600">
+                      {chart120mMa.error || "图表暂不可用"}
                     </div>
                   )}
                 </section>
