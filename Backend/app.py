@@ -1,9 +1,13 @@
+import io
+import base64
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 import os
 
 import json
-import base64
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -2322,3 +2326,194 @@ def get_market_overview():
 def _startup_background_refresh():
     preload_disk_caches_on_startup()
     start_background_refresh_thread()
+
+
+
+def get_60m_data_for_chart(symbol: str, max_retries: int = 3) -> pd.DataFrame:
+    pure = (symbol or "").split(".")[0].strip().upper()
+    last_err = None
+
+    def infer_sina_symbol(code: str) -> str:
+        if code.startswith(("600", "601", "603", "605", "688")):
+            return f"sh{code}"
+        return f"sz{code}"
+
+    for i in range(max_retries):
+        try:
+            df = ak.stock_zh_a_hist_min_em(symbol=pure, period="60", adjust="")
+            if df is not None and not df.empty:
+                rename_map = {
+                    "时间": "datetime",
+                    "开盘": "open",
+                    "最高": "high",
+                    "最低": "low",
+                    "收盘": "close",
+                    "成交量": "volume",
+                }
+                df = df.rename(columns=rename_map)
+                need_cols = ["datetime", "open", "high", "low", "close", "volume"]
+                for c in need_cols:
+                    if c not in df.columns:
+                        raise RuntimeError(f"东财分钟线缺少列: {c}")
+                df["datetime"] = pd.to_datetime(df["datetime"])
+                for c in ["open", "high", "low", "close", "volume"]:
+                    df[c] = pd.to_numeric(df[c], errors="coerce")
+                df = df.dropna(subset=["datetime", "open", "high", "low", "close"])
+                return df[need_cols].sort_values("datetime").reset_index(drop=True)
+        except Exception as e:
+            last_err = e
+            print(f"[chart eastmoney retry {i+1}/{max_retries}] error:", e)
+            time.sleep(2)
+
+    try:
+        sina_symbol = infer_sina_symbol(pure)
+        df = ak.stock_zh_a_minute(symbol=sina_symbol, period="60", adjust="")
+        if df is None or df.empty:
+            raise RuntimeError("新浪分钟线为空")
+
+        rename_map = {
+            "day": "datetime",
+            "date": "datetime",
+            "时间": "datetime",
+            "open": "open",
+            "high": "high",
+            "low": "low",
+            "close": "close",
+            "volume": "volume",
+        }
+        df = df.rename(columns=rename_map)
+        need_cols = ["datetime", "open", "high", "low", "close", "volume"]
+        for c in need_cols:
+            if c not in df.columns:
+                raise RuntimeError(f"新浪分钟线缺少列: {c}")
+
+        df["datetime"] = pd.to_datetime(df["datetime"])
+        for c in ["open", "high", "low", "close", "volume"]:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        df = df.dropna(subset=["datetime", "open", "high", "low", "close"])
+        print("[chart fallback] using sina 60m data")
+        return df[need_cols].sort_values("datetime").reset_index(drop=True)
+    except Exception as e:
+        raise RuntimeError(f"60分钟数据获取失败。东财最后错误: {last_err}; 新浪错误: {e}")
+
+
+def get_daily_data_for_chart(symbol: str) -> pd.DataFrame:
+    pro = get_pro()
+    ts_code = to_ts_code(symbol)
+
+    df = pro.daily(
+        ts_code=ts_code,
+        start_date="20240101",
+        end_date=datetime.now().strftime("%Y%m%d"),
+    )
+    if df is None or df.empty:
+        raise RuntimeError("未获取到日线数据")
+
+    df = df.rename(columns={
+        "trade_date": "date",
+        "open": "open",
+        "high": "high",
+        "low": "low",
+        "close": "close",
+        "vol": "volume",
+    })
+    df["date"] = pd.to_datetime(df["date"])
+    for c in ["open", "high", "low", "close", "volume"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    df = df.sort_values("date").reset_index(drop=True)
+    return df[["date", "open", "high", "low", "close", "volume"]].copy()
+
+
+def to_120min_for_chart(df_60: pd.DataFrame) -> pd.DataFrame:
+    work = df_60.copy()
+    work = work.sort_values("datetime").reset_index(drop=True)
+    work["grp"] = work.index // 2
+    out = work.groupby("grp", as_index=False).agg({
+        "datetime": "last",
+        "open": "first",
+        "high": "max",
+        "low": "min",
+        "close": "last",
+        "volume": "sum",
+    })
+    return out
+
+
+def fig_to_base64():
+    buf = io.BytesIO()
+    plt.tight_layout()
+    plt.savefig(buf, format="png", dpi=140, bbox_inches="tight")
+    plt.close()
+    buf.seek(0)
+    return base64.b64encode(buf.read()).decode("utf-8")
+
+
+@app.get("/chart/daily-vs-120ma60")
+def get_chart_daily_vs_120ma60(symbol: str = Query(..., description="A股代码，如 600519 或 300308")):
+    try:
+        df_60 = get_60m_data_for_chart(symbol)
+        df_day = get_daily_data_for_chart(symbol)
+
+        df_120 = to_120min_for_chart(df_60)
+        df_120["MA60"] = df_120["close"].rolling(60).mean()
+
+        df_120["trade_date"] = df_120["datetime"].dt.normalize()
+        ma60_daily = (
+            df_120.groupby("trade_date", as_index=False)
+            .tail(1)[["trade_date", "MA60"]]
+            .sort_values("trade_date")
+            .rename(columns={"MA60": "MA60_120m"})
+        )
+
+        plot_day = df_day.copy()
+        plot_day["trade_date"] = plot_day["date"].dt.normalize()
+        plot_day = plot_day.merge(ma60_daily, on="trade_date", how="left").sort_values("date")
+
+        plt.figure(figsize=(12, 5))
+        plt.plot(plot_day["date"], plot_day["close"], label="日线收盘")
+        plt.plot(plot_day["date"], plot_day["MA60_120m"], label="120分钟 MA60")
+        plt.xticks(rotation=45)
+        plt.legend()
+        plt.title(f"{symbol} 日线收盘 + 120分钟MA60")
+
+        return {
+            "error": None,
+            "symbol": symbol,
+            "image_base64": fig_to_base64(),
+        }
+    except Exception as e:
+        return {
+            "error": safe_text(e),
+            "symbol": symbol,
+            "image_base64": None,
+        }
+
+
+@app.get("/chart/120m-ma")
+def get_chart_120m_ma(symbol: str = Query(..., description="A股代码，如 600519 或 300308")):
+    try:
+        df_60 = get_60m_data_for_chart(symbol)
+        df_120 = to_120min_for_chart(df_60)
+
+        for ma in [5, 10, 30, 60, 120]:
+            df_120[f"MA{ma}"] = df_120["close"].rolling(ma).mean()
+
+        plt.figure(figsize=(12, 5))
+        plt.plot(df_120["datetime"], df_120["close"], label="120分钟收盘")
+        for ma in [5, 10, 30, 60, 120]:
+            plt.plot(df_120["datetime"], df_120[f"MA{ma}"], label=f"MA{ma}")
+        plt.xticks(rotation=45)
+        plt.legend()
+        plt.title(f"{symbol} 120分钟线 + MA5/10/30/60/120")
+
+        return {
+            "error": None,
+            "symbol": symbol,
+            "image_base64": fig_to_base64(),
+        }
+    except Exception as e:
+        return {
+            "error": safe_text(e),
+            "symbol": symbol,
+            "image_base64": None,
+        }
