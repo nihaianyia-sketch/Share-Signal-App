@@ -1685,6 +1685,81 @@ def get_watchlist_items(
         return {"items": [], "count": 0, "error": safe_text(e)}
 
 
+
+
+def get_capital_flow(symbol: str):
+    pure = (symbol or "").split(".")[0].strip().upper()
+
+    def infer_market(code: str):
+        if code.startswith(("600", "601", "603", "605", "688")):
+            return "sh"
+        return "sz"
+
+    def fetch_df(code: str):
+        market = infer_market(code)
+
+        # 兼容不同 akshare 版本
+        attempts = [
+            lambda: ak.stock_individual_fund_flow(stock=code),
+            lambda: ak.stock_individual_fund_flow(stock=code, market=market),
+        ]
+
+        last_err = None
+        for fn in attempts:
+            try:
+                df = fn()
+                if df is not None and not df.empty:
+                    return df
+            except Exception as e:
+                last_err = e
+        if last_err is not None:
+            raise last_err
+        return None
+
+    try:
+        df = fetch_df(pure)
+        if df is None or df.empty:
+            return {"available": False, "error": "个股资金流接口当前无数据"}
+
+        row = df.iloc[0]
+
+        def pick(*names):
+            for n in names:
+                if n in row and pd.notna(row.get(n)):
+                    return row.get(n)
+            return None
+
+        main_inflow = pick("主力净流入-净额", "主力净流入", "今日主力净流入-净额")
+        super_inflow = pick("超大单净流入-净额", "超大单净流入")
+        big_inflow = pick("大单净流入-净额", "大单净流入")
+        medium_inflow = pick("中单净流入-净额", "中单净流入")
+
+        trend_label = "中性"
+        try:
+            mf = float(main_inflow) if main_inflow is not None else 0.0
+            if mf > 0:
+                trend_label = "净流入"
+            elif mf < 0:
+                trend_label = "净流出"
+        except Exception:
+            pass
+
+        return {
+            "available": True,
+            "trend_label": trend_label,
+            "main_inflow": pd.to_numeric(main_inflow, errors="coerce"),
+            "main_inflow_3d": None,
+            "main_inflow_5d": None,
+            "super_inflow": pd.to_numeric(super_inflow, errors="coerce"),
+            "big_inflow": pd.to_numeric(big_inflow, errors="coerce"),
+            "medium_inflow": pd.to_numeric(medium_inflow, errors="coerce"),
+            "source_note": "eastmoney_individual_fund_flow",
+            "error": None,
+        }
+    except Exception as e:
+        return {"available": False, "error": safe_text(e)}
+
+
 def get_capital_flow_source2_tushare(symbol: str):
     """
     使用 Tushare moneyflow 作为日级 fallback
@@ -1744,27 +1819,33 @@ def get_cached_capital_flow(symbol: str):
 def get_capital_flow_multi_source(symbol: str):
     pure = (symbol or "").split(".")[0].strip().upper()
 
-    # === 1. 优先读缓存（核心优化）===
     cached = get_cached_capital_flow(pure)
     if result_available(cached):
-        return {**cached, "source": "cache"}
+        source = cached.get("source") or cached.get("source_note") or ""
+        # 如果缓存里已经是个股资金流，直接返回
+        if source in {"eastmoney_realtime", "tushare_daily", "cache"} or "eastmoney" in str(source) or "moneyflow" in str(source):
+            return {**cached, "source": cached.get("source") or "cache"}
 
-    # === 2. 实时源 ===
     source_specs = [
         (
-            "hsgt_market",
-            1.5,
-            lambda: get_capital_flow_source3_hsgt(pure),
-        ),
-        (
             "eastmoney_realtime",
-            SOURCE_TIMEOUTS["capital_flow_source1"],
+            1.8,
             lambda: get_capital_flow(pure),
         ),
         (
             "tushare_daily",
-            SOURCE_TIMEOUTS["capital_flow_source2"],
+            1.5,
             lambda: get_capital_flow_source2_tushare(pure),
+        ),
+        (
+            "cache",
+            0.05,
+            lambda: get_cached_capital_flow(pure),
+        ),
+        (
+            "hsgt_market",
+            1.5,
+            lambda: get_capital_flow_source3_hsgt(pure),
         ),
     ]
 
@@ -1777,7 +1858,6 @@ def get_capital_flow_multi_source(symbol: str):
         },
     )
 
-    # === 3. 成功就写缓存（关键）===
     if result_available(result):
         CAPITAL_FLOW_CACHE[pure] = dict(result)
         CAPITAL_FLOW_CACHE_TS[pure] = time.time()
