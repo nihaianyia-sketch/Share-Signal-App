@@ -1349,11 +1349,26 @@ function removeFavorite(s: string) {
                         {capitalFlow.trend_label || '未知'}
                       </div>
 
-                      <div className="grid grid-cols-2 md:grid-cols-2 gap-3 mb-4">
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
                         <IndicatorCard
                           title="资金趋势"
                           value={capitalFlow.trend_label}
                           note="结合单日与5日主力资金判断"
+                        />
+                        <IndicatorCard
+                          title="数据类型"
+                          value={
+                            capitalFlow.source === "eastmoney_realtime"
+                              ? "个股资金流"
+                              : capitalFlow.source === "tushare_daily"
+                              ? "个股资金流（日级）"
+                              : capitalFlow.source === "hsgt_market"
+                              ? "北向资金代理"
+                              : capitalFlow.source === "cache"
+                              ? "缓存资金数据"
+                              : "未知"
+                          }
+                          note={capitalFlow.source_note || capitalFlow.source || undefined}
                         />
                         <IndicatorCard
                           title="图形说明"
@@ -1361,6 +1376,24 @@ function removeFavorite(s: string) {
                           note="中线为0轴，便于对比资金方向与强弱"
                         />
                       </div>
+
+                      {capitalFlow.source === "hsgt_market" ? (
+                        <div className="text-xs text-gray-500 mb-3">
+                          当前为北向资金代理值，不代表完整个股分单资金结构。
+                        </div>
+                      ) : null}
+
+                      {capitalFlow.source === "eastmoney_realtime" ? (
+                        <div className="text-xs text-gray-500 mb-3">
+                          当前为个股实时资金流，可查看主力、超大单、大单、中单的净流入流出结构。
+                        </div>
+                      ) : null}
+
+                      {capitalFlow.source === "cache" ? (
+                        <div className="text-xs text-gray-500 mb-3">
+                          当前展示为缓存资金数据，可能略有滞后。
+                        </div>
+                      ) : null}
 
                       <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
                         <IndicatorCard
